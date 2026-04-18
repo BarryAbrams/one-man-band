@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>One Man Band Control</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+  </head>
+  <body>
+    <main class="shell" x-data="dashboard()" x-init="init()">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Closed-System Controller</p>
+          <h1>One Man Band</h1>
+          <p class="lede">
+            Browser-based control surface for rails, solenoids, and future audio playback on the Pi.
+          </p>
+        </div>
+
+        <div class="status-card">
+          <div class="status-line">
+            <span class="label">Status</span>
+            <span class="badge" :class="state.connected ? 'ok' : 'error'" x-text="state.connected ? 'Connected' : 'Disconnected'"></span>
+          </div>
+          <div class="status-grid">
+            <div>
+              <span class="label">Backend</span>
+              <strong x-text="state.backend || 'unknown'"></strong>
+            </div>
+            <div>
+              <span class="label">Protocol</span>
+              <strong x-text="state.version || 0"></strong>
+            </div>
+          </div>
+          <template x-if="state.error">
+            <p class="error-text" x-text="state.error"></p>
+          </template>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">Power Rails</p>
+            <h2>Supply Control</h2>
+          </div>
+          <div class="actions">
+            <button class="secondary" @click="setAllRails(true)">All On</button>
+            <button class="secondary" @click="setAllRails(false)">All Off</button>
+          </div>
+        </div>
+        <div class="grid">
+          <template x-for="name in meta.rails" :key="name">
+            <button class="tile" :class="state.rails_map[name] ? 'active' : ''" @click="toggleRail(name)">
+              <span class="tile-title" x-text="name"></span>
+              <span class="tile-value" x-text="state.rails_map[name] ? 'ON' : 'OFF'"></span>
+            </button>
+          </template>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">Actuators</p>
+            <h2>Solenoids</h2>
+          </div>
+          <div class="actions">
+            <button class="secondary" @click="clearSolenoids()">Clear All</button>
+            <button class="secondary" @click="refresh()">Refresh</button>
+          </div>
+        </div>
+        <div class="grid">
+          <template x-for="name in meta.solenoids" :key="name">
+            <button class="tile" :class="state.solenoids_map[name] ? 'active warm' : ''" @click="toggleSolenoid(name)">
+              <span class="tile-title" x-text="name"></span>
+              <span class="tile-value" x-text="state.solenoids_map[name] ? 'ENGAGED' : 'IDLE'"></span>
+            </button>
+          </template>
+        </div>
+      </section>
+
+      <section class="split">
+        <section class="panel compact">
+          <p class="eyebrow">Diagnostics</p>
+          <h2>Alarm Inputs</h2>
+          <div class="list">
+            <template x-for="name in meta.alarms" :key="name">
+              <div class="row">
+                <span x-text="name"></span>
+                <strong :class="state.alarms_map[name] ? 'error-text' : 'muted'" x-text="state.alarms_map[name] ? 'HIGH' : 'LOW'"></strong>
+              </div>
+            </template>
+          </div>
+        </section>
+
+        <section class="panel compact">
+          <p class="eyebrow">Sensors</p>
+          <h2>INA Presence</h2>
+          <div class="list">
+            <template x-for="name in meta.ina_presence" :key="name">
+              <div class="row">
+                <span x-text="name"></span>
+                <strong :class="state.ina_presence_map[name] ? 'ok-text' : 'muted'" x-text="state.ina_presence_map[name] ? 'PRESENT' : 'MISSING'"></strong>
+              </div>
+            </template>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script>
+      function dashboard() {
+        return {
+          meta: {{ metadata | tojson }},
+          state: {
+            connected: false,
+            backend: "unknown",
+            version: 0,
+            error: "",
+            rails_map: {},
+            solenoids_map: {},
+            alarms_map: {},
+            ina_presence_map: {},
+          },
+          socket: null,
+
+          init() {
+            this.socket = io();
+            this.socket.on("meta:init", (payload) => {
+              this.meta = payload;
+            });
+            this.socket.on("state:update", (payload) => {
+              this.state = payload;
+            });
+            this.socket.on("server:error", (payload) => {
+              this.state = { ...this.state, error: payload.message || "Unknown server error" };
+            });
+          },
+
+          refresh() {
+            this.socket.emit("state:refresh");
+          },
+
+          toggleRail(name) {
+            this.socket.emit("rail:toggle", { name });
+          },
+
+          setAllRails(enabled) {
+            this.socket.emit("rails:set_all", { enabled });
+          },
+
+          toggleSolenoid(name) {
+            this.socket.emit("solenoid:toggle", { name });
+          },
+
+          clearSolenoids() {
+            this.socket.emit("solenoids:clear");
+          },
+        };
+      }
+    </script>
+  </body>
+</html>
