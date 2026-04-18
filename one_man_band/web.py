@@ -43,6 +43,10 @@ def create_app() -> Flask:
             }
         )
 
+    @app.get("/favicon.ico")
+    def favicon():
+        return ("", 204)
+
     return app
 
 

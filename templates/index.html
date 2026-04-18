@@ -6,7 +6,7 @@
     <title>One Man Band Control</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js"></script>
-    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" crossorigin="anonymous"></script>
   </head>
   <body>
     <main class="shell" x-data="dashboard()" x-init="init()">
@@ -32,6 +32,10 @@
             <div>
               <span class="label">Protocol</span>
               <strong x-text="state.version || 0"></strong>
+            </div>
+            <div>
+              <span class="label">Socket</span>
+              <strong :class="socketConnected ? 'ok-text' : 'muted'" x-text="socketConnected ? 'Live' : 'Polling'"></strong>
             </div>
           </div>
           <template x-if="state.error">
@@ -126,9 +130,32 @@
             ina_presence_map: {},
           },
           socket: null,
+          socketConnected: false,
+          pollHandle: null,
 
           init() {
-            this.socket = io();
+            this.loadState();
+            this.startPolling();
+
+            if (typeof io === "undefined") {
+              this.state = { ...this.state, error: "Socket.IO client failed to load" };
+              return;
+            }
+
+            this.socket = io({
+              transports: ["websocket", "polling"],
+            });
+
+            this.socket.on("connect", () => {
+              this.socketConnected = true;
+              this.loadState();
+            });
+            this.socket.on("disconnect", () => {
+              this.socketConnected = false;
+            });
+            this.socket.on("connect_error", () => {
+              this.socketConnected = false;
+            });
             this.socket.on("meta:init", (payload) => {
               this.meta = payload;
             });
@@ -140,24 +167,63 @@
             });
           },
 
+          startPolling() {
+            if (this.pollHandle) {
+              clearInterval(this.pollHandle);
+            }
+            this.pollHandle = setInterval(() => {
+              if (!this.socketConnected) {
+                this.loadState();
+              }
+            }, 1000);
+          },
+
+          async loadState() {
+            try {
+              const response = await fetch("/api/state");
+              if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+              }
+              this.state = await response.json();
+            } catch (error) {
+              this.state = {
+                ...this.state,
+                connected: false,
+                error: `Unable to load state: ${error.message}`,
+              };
+            }
+          },
+
           refresh() {
-            this.socket.emit("state:refresh");
+            if (this.socketConnected && this.socket) {
+              this.socket.emit("state:refresh");
+              return;
+            }
+            this.loadState();
           },
 
           toggleRail(name) {
-            this.socket.emit("rail:toggle", { name });
+            if (this.socketConnected && this.socket) {
+              this.socket.emit("rail:toggle", { name });
+            }
           },
 
           setAllRails(enabled) {
-            this.socket.emit("rails:set_all", { enabled });
+            if (this.socketConnected && this.socket) {
+              this.socket.emit("rails:set_all", { enabled });
+            }
           },
 
           toggleSolenoid(name) {
-            this.socket.emit("solenoid:toggle", { name });
+            if (this.socketConnected && this.socket) {
+              this.socket.emit("solenoid:toggle", { name });
+            }
           },
 
           clearSolenoids() {
-            this.socket.emit("solenoids:clear");
+            if (this.socketConnected && this.socket) {
+              this.socket.emit("solenoids:clear");
+            }
           },
         };
       }
