@@ -295,6 +295,35 @@ button:hover {
   font-size: 0.82rem;
 }
 
+.telemetry-tile {
+  min-height: 190px;
+}
+
+.telemetry-readings {
+  display: grid;
+  gap: 14px;
+}
+
+.reading-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(78, 60, 33, 0.08);
+}
+
+.reading-label {
+  color: var(--muted);
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.reading-value {
+  font-size: 1.2rem;
+}
+
 .tile-title {
   font-size: 1.05rem;
   font-weight: 700;

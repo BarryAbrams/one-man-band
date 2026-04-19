@@ -26,6 +26,10 @@ REG_ALARMS: Final[int] = 0x03
 REG_INA_PRESENCE: Final[int] = 0x04
 REG_SERVO_ENABLE_MASK: Final[int] = 0x05
 REG_SERVO_BASE: Final[int] = 0x10
+REG_INA0_VOLTAGE_L: Final[int] = 0x20
+REG_INA0_CURRENT_L: Final[int] = 0x22
+REG_INA1_VOLTAGE_L: Final[int] = 0x24
+REG_INA1_CURRENT_L: Final[int] = 0x26
 
 RAILS: Final[dict[str, int]] = {
     "12V_A": 1 << 0,
@@ -51,6 +55,21 @@ INA_BITS: Final[dict[str, int]] = {
     "8V": 1 << 1,
 }
 
+INA_CHANNELS: Final[dict[str, dict[str, object]]] = {
+    "12V_C": {
+        "title": "Solenoid Line",
+        "presence_mask": 1 << 0,
+        "voltage_reg": REG_INA0_VOLTAGE_L,
+        "current_reg": REG_INA0_CURRENT_L,
+    },
+    "8V": {
+        "title": "Servo Line",
+        "presence_mask": 1 << 1,
+        "voltage_reg": REG_INA1_VOLTAGE_L,
+        "current_reg": REG_INA1_CURRENT_L,
+    },
+}
+
 GPIO_INPUTS: Final[dict[str, int]] = {
     "1": 17,
     "2": 27,
@@ -72,6 +91,8 @@ class DeviceState:
     servo_values: list[int] | None = None
     alarms: int = 0
     ina_presence: int = 0
+    ina_voltage_mv: dict[str, int] | None = None
+    ina_current_ma: dict[str, int] | None = None
     connected: bool = False
     error: str = ""
     backend: str = "disconnected"
@@ -92,6 +113,12 @@ class DeviceState:
             "servo_values_map": {
                 str(channel): self._servo_value(channel) for channel in SERVO_CHANNELS
             },
+            "ina_present_map": {
+                name: bool(self.ina_presence & int(config["presence_mask"]))
+                for name, config in INA_CHANNELS.items()
+            },
+            "ina_voltage_map": self.ina_voltage_mv or {},
+            "ina_current_map": self.ina_current_ma or {},
             "gpio_inputs_map": self.gpio_inputs or {},
         }
 
@@ -114,6 +141,8 @@ class DeviceController:
             connected=self._mock_mode,
             backend="mock" if self._mock_mode else "i2c",
             servo_values=[127 for _ in SERVO_CHANNELS],
+            ina_voltage_mv={"12V_C": 0, "8V": 8000},
+            ina_current_ma={"12V_C": 0, "8V": 0},
             gpio_inputs={name: False for name in GPIO_INPUTS},
         )
         self._setup_gpio()
@@ -168,6 +197,17 @@ class DeviceController:
     def _write_reg(self, bus: SMBus, reg: int, value: int) -> None:
         bus.write_i2c_block_data(DEVICE, reg, [value & 0xFF])
 
+    def _read_u16_le(self, bus: SMBus, reg_low: int) -> int:
+        low = self._read_reg(bus, reg_low)
+        high = self._read_reg(bus, reg_low + 1)
+        return low | (high << 8)
+
+    def _read_i16_le(self, bus: SMBus, reg_low: int) -> int:
+        value = self._read_u16_le(bus, reg_low)
+        if value & 0x8000:
+            value -= 0x10000
+        return value
+
     def _read_from_bus(self) -> DeviceState:
         gpio_inputs, gpio_error = self._read_gpio_inputs()
 
@@ -185,6 +225,14 @@ class DeviceController:
                 servo_values = [
                     self._read_reg(bus, REG_SERVO_BASE + channel) for channel in SERVO_CHANNELS
                 ]
+                ina_voltage_mv = {
+                    name: self._read_u16_le(bus, int(config["voltage_reg"]))
+                    for name, config in INA_CHANNELS.items()
+                }
+                ina_current_ma = {
+                    name: self._read_i16_le(bus, int(config["current_reg"]))
+                    for name, config in INA_CHANNELS.items()
+                }
                 return DeviceState(
                     version=self._read_reg(bus, REG_VERSION),
                     rails=self._read_reg(bus, REG_RAILS),
@@ -193,6 +241,8 @@ class DeviceController:
                     servo_values=servo_values,
                     alarms=self._read_reg(bus, REG_ALARMS),
                     ina_presence=self._read_reg(bus, REG_INA_PRESENCE),
+                    ina_voltage_mv=ina_voltage_mv,
+                    ina_current_ma=ina_current_ma,
                     connected=True,
                     error="",
                     backend="i2c",
@@ -306,6 +356,13 @@ class DeviceController:
             "rails": list(RAILS.keys()),
             "solenoids": list(SOLENOIDS.keys()),
             "servos": list(SERVO_CHANNELS),
+            "ina_channels": {
+                name: {
+                    "title": str(config["title"]),
+                    "key": name,
+                }
+                for name, config in INA_CHANNELS.items()
+            },
             "gpio_inputs": list(GPIO_INPUTS.keys()),
             "gpio_pins": GPIO_INPUTS,
             "mock_mode": self._mock_mode,

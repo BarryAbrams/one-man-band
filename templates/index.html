@@ -127,6 +127,38 @@
       <section class="panel">
         <div class="panel-header">
           <div>
+            <p class="eyebrow">Power Monitor</p>
+            <h2>INA260 Telemetry</h2>
+          </div>
+          <div class="actions">
+            <button class="secondary" @click="refresh()">Refresh</button>
+          </div>
+        </div>
+        <div class="grid">
+          <template x-for="channel in Object.values(meta.ina_channels || {})" :key="channel.key">
+            <section class="tile telemetry-tile" :class="state.ina_present_map[channel.key] ? 'active' : ''">
+              <div>
+                <span class="tile-title" x-text="channel.title"></span>
+                <span class="tile-subtitle" x-text="state.ina_present_map[channel.key] ? 'Sensor present' : 'Sensor not detected'"></span>
+              </div>
+              <div class="telemetry-readings">
+                <div class="reading-row">
+                  <span class="reading-label">Voltage</span>
+                  <strong class="reading-value" x-text="formatVoltage(state.ina_voltage_map[channel.key])"></strong>
+                </div>
+                <div class="reading-row">
+                  <span class="reading-label">Current</span>
+                  <strong class="reading-value" x-text="formatCurrent(state.ina_current_map[channel.key])"></strong>
+                </div>
+              </div>
+            </section>
+          </template>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
             <p class="eyebrow">Inputs</p>
             <h2>Pi GPIO Inputs</h2>
           </div>
@@ -187,6 +219,9 @@
             solenoids_map: {},
             servo_enabled_map: {},
             servo_values_map: {},
+            ina_present_map: {},
+            ina_voltage_map: {},
+            ina_current_map: {},
             gpio_inputs_map: {},
             gpio_error: "",
           },
@@ -321,6 +356,20 @@
                 value: Number(value),
               });
             }
+          },
+
+          formatVoltage(value) {
+            if (typeof value !== "number") {
+              return "--";
+            }
+            return `${(value / 1000).toFixed(3)} V`;
+          },
+
+          formatCurrent(value) {
+            if (typeof value !== "number") {
+              return "--";
+            }
+            return `${value} mA`;
           },
         };
       }
