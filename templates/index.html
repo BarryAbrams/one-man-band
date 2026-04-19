@@ -24,20 +24,9 @@
             <span class="label">Status</span>
             <span class="badge" :class="state.connected ? 'ok' : 'error'" x-text="state.connected ? 'Connected' : 'Disconnected'"></span>
           </div>
-          <div class="status-grid">
-            <div>
-              <span class="label">Backend</span>
-              <strong x-text="state.backend || 'unknown'"></strong>
-            </div>
-            <div>
-              <span class="label">Protocol</span>
-              <strong x-text="state.version || 0"></strong>
-            </div>
-            <div>
-              <span class="label">Socket</span>
-              <strong :class="socketConnected ? 'ok-text' : 'muted'" x-text="socketConnected ? 'Live' : 'Polling'"></strong>
-            </div>
-          </div>
+          <p class="status-copy">
+            Control the system power rails and solenoids from a single local interface.
+          </p>
           <template x-if="state.error">
             <p class="error-text" x-text="state.error"></p>
           </template>
@@ -58,7 +47,8 @@
         <div class="grid">
           <template x-for="name in meta.rails" :key="name">
             <button class="tile" :class="state.rails_map[name] ? 'active' : ''" @click="toggleRail(name)">
-              <span class="tile-title" x-text="name"></span>
+              <span class="tile-title" x-text="railLabels[name]?.title || name"></span>
+              <span class="tile-subtitle" x-text="railLabels[name]?.subtitle || ''"></span>
               <span class="tile-value" x-text="state.rails_map[name] ? 'ON' : 'OFF'"></span>
             </button>
           </template>
@@ -86,39 +76,30 @@
         </div>
       </section>
 
-      <section class="split">
-        <section class="panel compact">
-          <p class="eyebrow">Diagnostics</p>
-          <h2>Alarm Inputs</h2>
-          <div class="list">
-            <template x-for="name in meta.alarms" :key="name">
-              <div class="row">
-                <span x-text="name"></span>
-                <strong :class="state.alarms_map[name] ? 'error-text' : 'muted'" x-text="state.alarms_map[name] ? 'HIGH' : 'LOW'"></strong>
-              </div>
-            </template>
-          </div>
-        </section>
-
-        <section class="panel compact">
-          <p class="eyebrow">Sensors</p>
-          <h2>INA Presence</h2>
-          <div class="list">
-            <template x-for="name in meta.ina_presence" :key="name">
-              <div class="row">
-                <span x-text="name"></span>
-                <strong :class="state.ina_presence_map[name] ? 'ok-text' : 'muted'" x-text="state.ina_presence_map[name] ? 'PRESENT' : 'MISSING'"></strong>
-              </div>
-            </template>
-          </div>
-        </section>
-      </section>
     </main>
 
     <script>
       function dashboard() {
         return {
           meta: {{ metadata | tojson }},
+          railLabels: {
+            "12V_A": {
+              title: "Audio Amp",
+              subtitle: "12V_A rail",
+            },
+            "12V_B": {
+              title: "Neopixels",
+              subtitle: "12V_B rail",
+            },
+            "12V_C": {
+              title: "Solenoid Voltage",
+              subtitle: "12V_C rail",
+            },
+            "8V": {
+              title: "Servos",
+              subtitle: "8V rail",
+            },
+          },
           state: {
             connected: false,
             backend: "unknown",

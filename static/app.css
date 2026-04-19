@@ -102,6 +102,12 @@ h2 {
   line-height: 1.6;
 }
 
+.status-copy {
+  margin: 18px 0 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
 .status-line,
 .status-grid,
 .panel-header,
@@ -226,6 +232,12 @@ button:hover {
 .tile-title {
   font-size: 1.05rem;
   font-weight: 700;
+}
+
+.tile-subtitle {
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.4;
 }
 
 .tile-value {
