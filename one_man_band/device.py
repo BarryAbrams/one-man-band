@@ -101,7 +101,7 @@ class DeviceController:
 
     def _setup_gpio(self) -> None:
         if GPIO is None:
-            self._gpio_error = "RPi.GPIO is not installed in this Python environment"
+            self._gpio_error = "No compatible GPIO library is installed in this Python environment"
             return
 
         pull_mode = {

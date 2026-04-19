@@ -24,8 +24,8 @@ Then open `http://localhost:5000`.
 
 - Real hardware mode is the default. It expects the RP2040 at I2C address `0x12` on bus `1`.
 - Mock mode is useful for browser/UI work before the Pi and RP2040 are wired together.
-- The GPIO monitor uses `RPi.GPIO`, so install project requirements inside the same virtualenv you use to run `app.py`.
-- If the GPIO panel says `RPi.GPIO is not installed in this Python environment`, activate the venv and run `pip install -r requirements.txt`.
+- The GPIO monitor imports `RPi.GPIO`, and on current Raspberry Pi OS this is best provided by the `rpi-lgpio` compatibility package from `requirements.txt`.
+- If the GPIO panel says `No compatible GPIO library is installed in this Python environment`, activate the venv and run `pip install -r requirements.txt`.
 - For a fully offline deployment, vendor Alpine locally instead of relying on an external CDN.
 
 ## Next good additions
