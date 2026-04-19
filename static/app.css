@@ -212,6 +212,12 @@ button:hover {
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 
+.servo-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
 .tile {
   padding: 20px;
   text-align: left;
@@ -231,6 +237,62 @@ button:hover {
 .tile.active.warm {
   background: linear-gradient(180deg, #fbefe6, var(--warm-soft));
   box-shadow: inset 0 0 0 1px rgba(183, 93, 45, 0.14);
+}
+
+.servo-card {
+  padding: 20px;
+  background: #f8f3ea;
+  border: 1px solid rgba(78, 60, 33, 0.08);
+  border-radius: 24px;
+  min-height: 190px;
+}
+
+.servo-card.active {
+  background: linear-gradient(180deg, #eff9f4, #d9eee8);
+  box-shadow: inset 0 0 0 1px rgba(31, 107, 90, 0.12);
+}
+
+.servo-header,
+.servo-scale {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.servo-header {
+  align-items: flex-start;
+}
+
+.pill-button {
+  padding: 10px 14px;
+  background: #efe5d8;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.pill-button.active {
+  background: var(--accent);
+  color: #fffdf8;
+}
+
+.servo-label {
+  display: flex;
+  justify-content: space-between;
+  margin: 20px 0 10px;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.servo-slider {
+  width: 100%;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.servo-scale {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 0.82rem;
 }
 
 .tile-title {

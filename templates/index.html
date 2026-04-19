@@ -15,7 +15,7 @@
           <p class="eyebrow">Closed-System Controller</p>
           <h1>One Man Band</h1>
           <p class="lede">
-            Browser-based control surface for rails, solenoids, and future audio playback on the Pi.
+            Browser-based control surface for rails, relays, servos, and Pi-side inputs.
           </p>
         </div>
 
@@ -25,7 +25,7 @@
             <span class="badge" :class="state.connected ? 'ok' : 'error'" x-text="state.connected ? 'Connected' : 'Disconnected'"></span>
           </div>
           <p class="status-copy">
-            Control the system power rails and solenoids from a single local interface.
+            Control the system power rails, relays, servos, and GPIO inputs from a single local interface.
           </p>
           <template x-if="state.error">
             <p class="error-text" x-text="state.error"></p>
@@ -58,8 +58,7 @@
       <section class="panel">
         <div class="panel-header">
           <div>
-            <p class="eyebrow">Actuators</p>
-            <h2>Solenoids</h2>
+            <h2>Relays</h2>
           </div>
           <div class="actions">
             <button class="secondary" @click="clearSolenoids()">Clear All</button>
@@ -69,8 +68,7 @@
         <div class="grid">
           <template x-for="name in meta.solenoids" :key="name">
             <button class="tile" :class="state.solenoids_map[name] ? 'active warm' : ''" @click="toggleSolenoid(name)">
-              <span class="tile-title" x-text="solenoidLabels[name] || name"></span>
-              <span class="tile-subtitle" x-text="name"></span>
+              <span class="tile-title" x-text="relayLabels[name] || name"></span>
               <span class="tile-value" x-text="state.solenoids_map[name] ? 'ENGAGED' : 'IDLE'"></span>
             </button>
           </template>
@@ -80,8 +78,57 @@
       <section class="panel">
         <div class="panel-header">
           <div>
+            <p class="eyebrow">Motion</p>
+            <h2>Servos</h2>
+          </div>
+          <div class="actions">
+            <button class="secondary" @click="setAllServos(true)">Enable All</button>
+            <button class="secondary" @click="setAllServos(false)">Disable All</button>
+          </div>
+        </div>
+        <div class="servo-grid">
+          <template x-for="channel in meta.servos || []" :key="channel">
+            <section class="servo-card" :class="state.servo_enabled_map[String(channel)] ? 'active' : ''">
+              <div class="servo-header">
+                <div>
+                  <span class="tile-title" x-text="`Servo ${channel}`"></span>
+                  <span class="tile-subtitle">PCA9685 channel</span>
+                </div>
+                <button
+                  class="pill-button"
+                  :class="state.servo_enabled_map[String(channel)] ? 'active' : ''"
+                  @click="toggleServoEnabled(channel)"
+                  x-text="state.servo_enabled_map[String(channel)] ? 'Enabled' : 'Disabled'"
+                ></button>
+              </div>
+              <label class="servo-label" :for="`servo-${channel}`">
+                Value <span x-text="servoDrafts[String(channel)] ?? state.servo_values_map[String(channel)] ?? 0"></span>
+              </label>
+              <input
+                class="servo-slider"
+                type="range"
+                min="0"
+                max="255"
+                :id="`servo-${channel}`"
+                :value="servoDrafts[String(channel)] ?? state.servo_values_map[String(channel)] ?? 0"
+                @input="servoDrafts[String(channel)] = Number($event.target.value)"
+                @change="setServoValue(channel, servoDrafts[String(channel)] ?? Number($event.target.value))"
+              >
+              <div class="servo-scale">
+                <span>0</span>
+                <span>127</span>
+                <span>255</span>
+              </div>
+            </section>
+          </template>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
             <p class="eyebrow">Inputs</p>
-            <h2>Pi GPIO Monitor</h2>
+            <h2>Pi GPIO Inputs</h2>
           </div>
           <div class="actions">
             <button class="secondary" @click="refresh()">Refresh</button>
@@ -90,7 +137,7 @@
         <div class="grid">
           <template x-for="name in meta.gpio_inputs || []" :key="name">
             <div class="tile" :class="state.gpio_inputs_map[name] ? 'active' : ''">
-              <span class="tile-title" x-text="name"></span>
+              <span class="tile-title" x-text="`Input ${name}`"></span>
               <span class="tile-subtitle" x-text="`BCM ${meta.gpio_pins?.[name] ?? '?'}`"></span>
               <span class="tile-value" x-text="state.gpio_inputs_map[name] ? 'HIGH' : 'LOW'"></span>
             </div>
@@ -125,7 +172,7 @@
               subtitle: "8V rail",
             },
           },
-          solenoidLabels: {
+          relayLabels: {
             "P0": "RL1",
             "P1": "RL2",
             "P2": "RL3",
@@ -138,12 +185,15 @@
             error: "",
             rails_map: {},
             solenoids_map: {},
+            servo_enabled_map: {},
+            servo_values_map: {},
             gpio_inputs_map: {},
             gpio_error: "",
           },
           socket: null,
           socketConnected: false,
           pollHandle: null,
+          servoDrafts: {},
 
           init() {
             this.loadState();
@@ -173,10 +223,19 @@
             });
             this.socket.on("state:update", (payload) => {
               this.state = payload;
+              this.syncServoDrafts(payload);
             });
             this.socket.on("server:error", (payload) => {
               this.state = { ...this.state, error: payload.message || "Unknown server error" };
             });
+          },
+
+          syncServoDrafts(payload) {
+            const nextDrafts = { ...this.servoDrafts };
+            Object.entries(payload.servo_values_map || {}).forEach(([channel, value]) => {
+              nextDrafts[channel] = Number(value);
+            });
+            this.servoDrafts = nextDrafts;
           },
 
           startPolling() {
@@ -197,6 +256,7 @@
                 throw new Error(`HTTP ${response.status}`);
               }
               this.state = await response.json();
+              this.syncServoDrafts(this.state);
             } catch (error) {
               this.state = {
                 ...this.state,
@@ -235,6 +295,31 @@
           clearSolenoids() {
             if (this.socketConnected && this.socket) {
               this.socket.emit("solenoids:clear");
+            }
+          },
+
+          toggleServoEnabled(channel) {
+            const key = String(channel);
+            if (this.socketConnected && this.socket) {
+              this.socket.emit("servo:set_enabled", {
+                channel,
+                enabled: !(this.state.servo_enabled_map[key] || false),
+              });
+            }
+          },
+
+          setAllServos(enabled) {
+            if (this.socketConnected && this.socket) {
+              this.socket.emit("servos:set_all", { enabled });
+            }
+          },
+
+          setServoValue(channel, value) {
+            if (this.socketConnected && this.socket) {
+              this.socket.emit("servo:set_value", {
+                channel,
+                value: Number(value),
+              });
             }
           },
         };

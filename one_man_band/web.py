@@ -110,3 +110,31 @@ def handle_solenoid_toggle(payload: dict[str, str]):
 def handle_solenoids_clear():
     state = controller.clear_solenoids()
     emit("state:update", state.to_payload(), broadcast=True)
+
+
+@socketio.on("servos:set_all")
+def handle_servos_set_all(payload: dict[str, bool]):
+    state = controller.set_all_servos_enabled(bool(payload["enabled"]))
+    emit("state:update", state.to_payload(), broadcast=True)
+
+
+@socketio.on("servo:set_enabled")
+def handle_servo_set_enabled(payload: dict[str, object]):
+    try:
+        channel = int(payload["channel"])
+        enabled = bool(payload["enabled"])
+        state = controller.set_servo_enabled(channel, enabled)
+        emit("state:update", state.to_payload(), broadcast=True)
+    except (KeyError, TypeError, ValueError) as exc:
+        emit("server:error", {"message": str(exc)})
+
+
+@socketio.on("servo:set_value")
+def handle_servo_set_value(payload: dict[str, object]):
+    try:
+        channel = int(payload["channel"])
+        value = int(payload["value"])
+        state = controller.set_servo_value(channel, value)
+        emit("state:update", state.to_payload(), broadcast=True)
+    except (KeyError, TypeError, ValueError) as exc:
+        emit("server:error", {"message": str(exc)})

@@ -24,6 +24,8 @@ REG_RAILS: Final[int] = 0x01
 REG_SOLENOIDS: Final[int] = 0x02
 REG_ALARMS: Final[int] = 0x03
 REG_INA_PRESENCE: Final[int] = 0x04
+REG_SERVO_ENABLE_MASK: Final[int] = 0x05
+REG_SERVO_BASE: Final[int] = 0x10
 
 RAILS: Final[dict[str, int]] = {
     "12V_A": 1 << 0,
@@ -50,13 +52,15 @@ INA_BITS: Final[dict[str, int]] = {
 }
 
 GPIO_INPUTS: Final[dict[str, int]] = {
-    "IN1": 17,
-    "IN2": 27,
-    "IN3": 22,
-    "IN4": 5,
-    "IN5": 6,
-    "IN6": 13,
+    "1": 17,
+    "2": 27,
+    "3": 22,
+    "4": 5,
+    "5": 6,
+    "6": 13,
 }
+
+SERVO_CHANNELS: Final[tuple[int, ...]] = tuple(range(8))
 
 
 @dataclass(slots=True)
@@ -64,6 +68,8 @@ class DeviceState:
     version: int = 0
     rails: int = 0
     solenoids: int = 0
+    servo_enable_mask: int = 0
+    servo_values: list[int] | None = None
     alarms: int = 0
     ina_presence: int = 0
     connected: bool = False
@@ -79,8 +85,20 @@ class DeviceState:
             "solenoids_map": {
                 name: bool(self.solenoids & mask) for name, mask in SOLENOIDS.items()
             },
+            "servo_enabled_map": {
+                str(channel): bool(self.servo_enable_mask & (1 << channel))
+                for channel in SERVO_CHANNELS
+            },
+            "servo_values_map": {
+                str(channel): self._servo_value(channel) for channel in SERVO_CHANNELS
+            },
             "gpio_inputs_map": self.gpio_inputs or {},
         }
+
+    def _servo_value(self, channel: int) -> int:
+        if self.servo_values is None or channel >= len(self.servo_values):
+            return 0
+        return int(self.servo_values[channel])
 
 
 class DeviceController:
@@ -95,6 +113,7 @@ class DeviceController:
             ina_presence=0b11 if self._mock_mode else 0,
             connected=self._mock_mode,
             backend="mock" if self._mock_mode else "i2c",
+            servo_values=[127 for _ in SERVO_CHANNELS],
             gpio_inputs={name: False for name in GPIO_INPUTS},
         )
         self._setup_gpio()
@@ -163,10 +182,15 @@ class DeviceController:
 
         try:
             with SMBus(I2C_BUS) as bus:
+                servo_values = [
+                    self._read_reg(bus, REG_SERVO_BASE + channel) for channel in SERVO_CHANNELS
+                ]
                 return DeviceState(
                     version=self._read_reg(bus, REG_VERSION),
                     rails=self._read_reg(bus, REG_RAILS),
                     solenoids=self._read_reg(bus, REG_SOLENOIDS),
+                    servo_enable_mask=self._read_reg(bus, REG_SERVO_ENABLE_MASK),
+                    servo_values=servo_values,
                     alarms=self._read_reg(bus, REG_ALARMS),
                     ina_presence=self._read_reg(bus, REG_INA_PRESENCE),
                     connected=True,
@@ -202,6 +226,12 @@ class DeviceController:
                     self._state.rails = value & 0x0F
                 elif reg == REG_SOLENOIDS:
                     self._state.solenoids = value & 0x0F
+                elif reg == REG_SERVO_ENABLE_MASK:
+                    self._state.servo_enable_mask = value & 0xFF
+                elif REG_SERVO_BASE <= reg < REG_SERVO_BASE + len(SERVO_CHANNELS):
+                    if self._state.servo_values is None:
+                        self._state.servo_values = [127 for _ in SERVO_CHANNELS]
+                    self._state.servo_values[reg - REG_SERVO_BASE] = value & 0xFF
                 self._state.connected = True
                 self._state.error = ""
                 self._state.gpio_inputs, self._state.gpio_error = self._read_gpio_inputs()
@@ -253,10 +283,29 @@ class DeviceController:
     def clear_solenoids(self) -> DeviceState:
         return self._update_register(REG_SOLENOIDS, 0x00)
 
+    def set_servo_enabled(self, channel: int, enabled: bool) -> DeviceState:
+        if channel not in SERVO_CHANNELS:
+            raise ValueError(f"Unknown servo channel: {channel}")
+        state = self.read_state()
+        mask = 1 << channel
+        value = (state.servo_enable_mask | mask) if enabled else (state.servo_enable_mask & ~mask)
+        return self._update_register(REG_SERVO_ENABLE_MASK, value)
+
+    def set_all_servos_enabled(self, enabled: bool) -> DeviceState:
+        return self._update_register(REG_SERVO_ENABLE_MASK, 0xFF if enabled else 0x00)
+
+    def set_servo_value(self, channel: int, value: int) -> DeviceState:
+        if channel not in SERVO_CHANNELS:
+            raise ValueError(f"Unknown servo channel: {channel}")
+        if not 0 <= value <= 255:
+            raise ValueError(f"Servo value must be between 0 and 255: {value}")
+        return self._update_register(REG_SERVO_BASE + channel, value)
+
     def metadata(self) -> dict[str, object]:
         return {
             "rails": list(RAILS.keys()),
             "solenoids": list(SOLENOIDS.keys()),
+            "servos": list(SERVO_CHANNELS),
             "gpio_inputs": list(GPIO_INPUTS.keys()),
             "gpio_pins": GPIO_INPUTS,
             "mock_mode": self._mock_mode,
