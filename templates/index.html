@@ -69,11 +69,36 @@
         <div class="grid">
           <template x-for="name in meta.solenoids" :key="name">
             <button class="tile" :class="state.solenoids_map[name] ? 'active warm' : ''" @click="toggleSolenoid(name)">
-              <span class="tile-title" x-text="name"></span>
+              <span class="tile-title" x-text="solenoidLabels[name] || name"></span>
+              <span class="tile-subtitle" x-text="name"></span>
               <span class="tile-value" x-text="state.solenoids_map[name] ? 'ENGAGED' : 'IDLE'"></span>
             </button>
           </template>
         </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">Inputs</p>
+            <h2>Pi GPIO Monitor</h2>
+          </div>
+          <div class="actions">
+            <button class="secondary" @click="refresh()">Refresh</button>
+          </div>
+        </div>
+        <div class="grid">
+          <template x-for="name in meta.gpio_inputs || []" :key="name">
+            <div class="tile" :class="state.gpio_inputs_map[name] ? 'active' : ''">
+              <span class="tile-title" x-text="name"></span>
+              <span class="tile-subtitle" x-text="`BCM ${meta.gpio_pins?.[name] ?? '?'}`"></span>
+              <span class="tile-value" x-text="state.gpio_inputs_map[name] ? 'HIGH' : 'LOW'"></span>
+            </div>
+          </template>
+        </div>
+        <template x-if="state.gpio_error">
+          <p class="error-text panel-note" x-text="state.gpio_error"></p>
+        </template>
       </section>
 
     </main>
@@ -100,6 +125,12 @@
               subtitle: "8V rail",
             },
           },
+          solenoidLabels: {
+            "P0": "RL1",
+            "P1": "RL2",
+            "P2": "RL3",
+            "P3": "RL4",
+          },
           state: {
             connected: false,
             backend: "unknown",
@@ -107,8 +138,8 @@
             error: "",
             rails_map: {},
             solenoids_map: {},
-            alarms_map: {},
-            ina_presence_map: {},
+            gpio_inputs_map: {},
+            gpio_error: "",
           },
           socket: null,
           socketConnected: false,

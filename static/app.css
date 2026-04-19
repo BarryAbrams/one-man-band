@@ -108,6 +108,10 @@ h2 {
   line-height: 1.6;
 }
 
+.panel-note {
+  margin: 16px 0 0;
+}
+
 .status-line,
 .status-grid,
 .panel-header,

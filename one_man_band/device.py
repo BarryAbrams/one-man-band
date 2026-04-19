@@ -10,6 +10,11 @@ try:
 except ImportError:  # pragma: no cover - depends on target hardware
     SMBus = None
 
+try:
+    import RPi.GPIO as GPIO
+except ImportError:  # pragma: no cover - depends on target hardware
+    GPIO = None
+
 
 I2C_BUS: Final[int] = 1
 DEVICE: Final[int] = 0x12
@@ -44,6 +49,15 @@ INA_BITS: Final[dict[str, int]] = {
     "8V": 1 << 1,
 }
 
+GPIO_INPUTS: Final[dict[str, int]] = {
+    "IN1": 17,
+    "IN2": 27,
+    "IN3": 22,
+    "IN4": 5,
+    "IN5": 6,
+    "IN6": 13,
+}
+
 
 @dataclass(slots=True)
 class DeviceState:
@@ -55,6 +69,8 @@ class DeviceState:
     connected: bool = False
     error: str = ""
     backend: str = "disconnected"
+    gpio_inputs: dict[str, bool] | None = None
+    gpio_error: str = ""
 
     def to_payload(self) -> dict[str, object]:
         return {
@@ -63,12 +79,7 @@ class DeviceState:
             "solenoids_map": {
                 name: bool(self.solenoids & mask) for name, mask in SOLENOIDS.items()
             },
-            "alarms_map": {
-                name: bool(self.alarms & mask) for name, mask in ALARM_BITS.items()
-            },
-            "ina_presence_map": {
-                name: bool(self.ina_presence & mask) for name, mask in INA_BITS.items()
-            },
+            "gpio_inputs_map": self.gpio_inputs or {},
         }
 
 
@@ -76,12 +87,60 @@ class DeviceController:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._mock_mode = os.environ.get("OMB_MOCK_HARDWARE", "0") == "1"
+        self._gpio_mode = os.environ.get("OMB_GPIO_PULL", "off").strip().lower()
+        self._gpio_ready = False
+        self._gpio_error = ""
         self._state = DeviceState(
             version=1 if self._mock_mode else 0,
             ina_presence=0b11 if self._mock_mode else 0,
             connected=self._mock_mode,
             backend="mock" if self._mock_mode else "i2c",
+            gpio_inputs={name: False for name in GPIO_INPUTS},
         )
+        self._setup_gpio()
+
+    def _setup_gpio(self) -> None:
+        if GPIO is None:
+            self._gpio_error = "RPi.GPIO is not installed"
+            return
+
+        pull_mode = {
+            "off": GPIO.PUD_OFF,
+            "up": GPIO.PUD_UP,
+            "down": GPIO.PUD_DOWN,
+        }.get(self._gpio_mode)
+
+        if pull_mode is None:
+            self._gpio_error = f"Invalid OMB_GPIO_PULL setting: {self._gpio_mode}"
+            return
+
+        try:
+            GPIO.setwarnings(False)
+            GPIO.setmode(GPIO.BCM)
+            for pin in GPIO_INPUTS.values():
+                GPIO.setup(pin, GPIO.IN, pull_up_down=pull_mode)
+            self._gpio_ready = True
+            self._gpio_error = ""
+        except RuntimeError as exc:
+            self._gpio_ready = False
+            self._gpio_error = str(exc)
+
+    def _read_gpio_inputs(self) -> tuple[dict[str, bool], str]:
+        if self._mock_mode:
+            return (self._state.gpio_inputs or {name: False for name in GPIO_INPUTS}, "")
+
+        if GPIO is None or not self._gpio_ready:
+            return ({name: False for name in GPIO_INPUTS}, self._gpio_error)
+
+        try:
+            return (
+                {name: bool(GPIO.input(pin)) for name, pin in GPIO_INPUTS.items()},
+                "",
+            )
+        except RuntimeError as exc:
+            self._gpio_ready = False
+            self._gpio_error = str(exc)
+            return ({name: False for name in GPIO_INPUTS}, self._gpio_error)
 
     def _read_reg(self, bus: SMBus, reg: int) -> int:
         bus.write_byte(DEVICE, reg)
@@ -91,11 +150,15 @@ class DeviceController:
         bus.write_i2c_block_data(DEVICE, reg, [value & 0xFF])
 
     def _read_from_bus(self) -> DeviceState:
+        gpio_inputs, gpio_error = self._read_gpio_inputs()
+
         if SMBus is None:
             return DeviceState(
                 connected=False,
                 error="smbus2 is not installed",
                 backend="unavailable",
+                gpio_inputs=gpio_inputs,
+                gpio_error=gpio_error,
             )
 
         try:
@@ -109,12 +172,16 @@ class DeviceController:
                     connected=True,
                     error="",
                     backend="i2c",
+                    gpio_inputs=gpio_inputs,
+                    gpio_error=gpio_error,
                 )
         except OSError as exc:
             return DeviceState(
                 connected=False,
                 error=str(exc),
                 backend="i2c",
+                gpio_inputs=gpio_inputs,
+                gpio_error=gpio_error,
             )
 
     def read_state(self) -> DeviceState:
@@ -122,6 +189,7 @@ class DeviceController:
             if self._mock_mode:
                 self._state.connected = True
                 self._state.backend = "mock"
+                self._state.gpio_inputs, self._state.gpio_error = self._read_gpio_inputs()
                 return DeviceState(**asdict(self._state))
 
             self._state = self._read_from_bus()
@@ -136,13 +204,17 @@ class DeviceController:
                     self._state.solenoids = value & 0x0F
                 self._state.connected = True
                 self._state.error = ""
+                self._state.gpio_inputs, self._state.gpio_error = self._read_gpio_inputs()
                 return DeviceState(**asdict(self._state))
 
             if SMBus is None:
+                gpio_inputs, gpio_error = self._read_gpio_inputs()
                 self._state = DeviceState(
                     connected=False,
                     error="smbus2 is not installed",
                     backend="unavailable",
+                    gpio_inputs=gpio_inputs,
+                    gpio_error=gpio_error,
                 )
                 return DeviceState(**asdict(self._state))
 
@@ -151,10 +223,13 @@ class DeviceController:
                     self._write_reg(bus, reg, value)
                 self._state = self._read_from_bus()
             except OSError as exc:
+                gpio_inputs, gpio_error = self._read_gpio_inputs()
                 self._state = DeviceState(
                     connected=False,
                     error=str(exc),
                     backend="i2c",
+                    gpio_inputs=gpio_inputs,
+                    gpio_error=gpio_error,
                 )
             return DeviceState(**asdict(self._state))
 
@@ -182,7 +257,8 @@ class DeviceController:
         return {
             "rails": list(RAILS.keys()),
             "solenoids": list(SOLENOIDS.keys()),
-            "alarms": list(ALARM_BITS.keys()),
-            "ina_presence": list(INA_BITS.keys()),
+            "gpio_inputs": list(GPIO_INPUTS.keys()),
+            "gpio_pins": GPIO_INPUTS,
             "mock_mode": self._mock_mode,
+            "gpio_pull": self._gpio_mode,
         }
