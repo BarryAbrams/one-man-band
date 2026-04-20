@@ -159,6 +159,74 @@
       <section class="panel">
         <div class="panel-header">
           <div>
+            <p class="eyebrow">Audio</p>
+            <h2>Playback</h2>
+          </div>
+          <div class="actions">
+            <button class="secondary" @click="loadAudioLibrary()">Refresh Library</button>
+          </div>
+        </div>
+        <div class="audio-layout">
+          <section class="audio-card">
+            <form class="upload-form" @submit.prevent="uploadAudio">
+              <label class="tile-subtitle" for="audio-file">Upload audio file</label>
+              <input id="audio-file" type="file" accept=".wav,.mp3,.ogg,audio/wav,audio/mpeg,audio/ogg" @change="setUploadFile">
+              <button class="secondary" type="submit" :disabled="uploading || !uploadFile">
+                <span x-text="uploading ? 'Uploading...' : 'Upload Audio'"></span>
+              </button>
+            </form>
+            <p class="tile-subtitle" x-text="`Accepted: ${(meta.audio_extensions || []).join(', ')}`"></p>
+            <template x-if="audio.status.error">
+              <p class="error-text panel-note" x-text="audio.status.error"></p>
+            </template>
+          </section>
+
+          <section class="audio-card">
+            <div class="audio-status-row">
+              <div>
+                <span class="tile-title">Now Playing</span>
+                <span class="tile-subtitle" x-text="audio.status.current_track || 'Nothing loaded'"></span>
+              </div>
+              <strong class="reading-value" x-text="audioStatusLabel()"></strong>
+            </div>
+            <div class="actions">
+              <button class="secondary" @click="resumeAudio()" :disabled="!audio.status.paused">Resume</button>
+              <button class="secondary" @click="pauseAudio()" :disabled="!audio.status.playing">Pause</button>
+              <button class="secondary" @click="stopAudio()" :disabled="!audio.status.current_track">Stop</button>
+            </div>
+            <label class="servo-label" for="audio-volume">
+              Volume <span x-text="Math.round((audio.status.volume || 0) * 100) + '%'"></span>
+            </label>
+            <input
+              id="audio-volume"
+              class="servo-slider"
+              type="range"
+              min="0"
+              max="100"
+              :value="Math.round((audio.status.volume || 0) * 100)"
+              @change="setAudioVolume(Number($event.target.value) / 100)"
+            >
+          </section>
+        </div>
+        <div class="audio-library">
+          <template x-if="!audio.tracks.length">
+            <p class="tile-subtitle">No audio files uploaded yet.</p>
+          </template>
+          <template x-for="track in audio.tracks" :key="track.name">
+            <div class="library-row">
+              <div>
+                <span class="tile-title" x-text="track.name"></span>
+                <span class="tile-subtitle" x-text="formatBytes(track.size_bytes)"></span>
+              </div>
+              <button class="pill-button active" @click="playAudio(track.name)">Play</button>
+            </div>
+          </template>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
             <p class="eyebrow">Inputs</p>
             <h2>Pi GPIO Inputs</h2>
           </div>
@@ -224,14 +292,30 @@
             ina_current_map: {},
             gpio_inputs_map: {},
             gpio_error: "",
+            audio_status: {},
+          },
+          audio: {
+            tracks: [],
+            status: {
+              available: false,
+              initialized: false,
+              playing: false,
+              paused: false,
+              current_track: null,
+              volume: 1,
+              error: "",
+            },
           },
           socket: null,
           socketConnected: false,
           pollHandle: null,
           servoDrafts: {},
+          uploadFile: null,
+          uploading: false,
 
           init() {
             this.loadState();
+            this.loadAudioLibrary();
             this.startPolling();
 
             if (typeof io === "undefined") {
@@ -259,9 +343,20 @@
             this.socket.on("state:update", (payload) => {
               this.state = payload;
               this.syncServoDrafts(payload);
+              if (payload.audio_status) {
+                this.audio.status = payload.audio_status;
+              }
+            });
+            this.socket.on("audio:update", (payload) => {
+              this.audio.status = payload.status || this.audio.status;
+              this.audio.tracks = payload.tracks || this.audio.tracks;
             });
             this.socket.on("server:error", (payload) => {
               this.state = { ...this.state, error: payload.message || "Unknown server error" };
+              this.audio.status = {
+                ...this.audio.status,
+                error: payload.message || "Unknown server error",
+              };
             });
           },
 
@@ -292,12 +387,69 @@
               }
               this.state = await response.json();
               this.syncServoDrafts(this.state);
+              if (this.state.audio_status) {
+                this.audio.status = this.state.audio_status;
+              }
             } catch (error) {
               this.state = {
                 ...this.state,
                 connected: false,
                 error: `Unable to load state: ${error.message}`,
               };
+            }
+          },
+
+          async loadAudioLibrary() {
+            try {
+              const response = await fetch("/api/audio");
+              if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+              }
+              const payload = await response.json();
+              this.audio.tracks = payload.tracks || [];
+              this.audio.status = payload.status || this.audio.status;
+            } catch (error) {
+              this.audio.status = {
+                ...this.audio.status,
+                error: `Unable to load audio library: ${error.message}`,
+              };
+            }
+          },
+
+          setUploadFile(event) {
+            this.uploadFile = event.target.files?.[0] || null;
+          },
+
+          async uploadAudio() {
+            if (!this.uploadFile) {
+              return;
+            }
+            this.uploading = true;
+            try {
+              const formData = new FormData();
+              formData.append("file", this.uploadFile);
+              const response = await fetch("/api/audio/upload", {
+                method: "POST",
+                body: formData,
+              });
+              const payload = await response.json();
+              if (!response.ok) {
+                throw new Error(payload.error || `HTTP ${response.status}`);
+              }
+              this.audio.tracks = payload.tracks || [];
+              this.audio.status = payload.status || this.audio.status;
+              this.uploadFile = null;
+              const input = document.getElementById("audio-file");
+              if (input) {
+                input.value = "";
+              }
+            } catch (error) {
+              this.audio.status = {
+                ...this.audio.status,
+                error: `Upload failed: ${error.message}`,
+              };
+            } finally {
+              this.uploading = false;
             }
           },
 
@@ -358,6 +510,36 @@
             }
           },
 
+          playAudio(filename) {
+            if (this.socketConnected && this.socket) {
+              this.socket.emit("audio:play", { filename });
+            }
+          },
+
+          stopAudio() {
+            if (this.socketConnected && this.socket) {
+              this.socket.emit("audio:stop");
+            }
+          },
+
+          pauseAudio() {
+            if (this.socketConnected && this.socket) {
+              this.socket.emit("audio:pause");
+            }
+          },
+
+          resumeAudio() {
+            if (this.socketConnected && this.socket) {
+              this.socket.emit("audio:resume");
+            }
+          },
+
+          setAudioVolume(volume) {
+            if (this.socketConnected && this.socket) {
+              this.socket.emit("audio:set_volume", { volume });
+            }
+          },
+
           formatVoltage(value) {
             if (typeof value !== "number") {
               return "--";
@@ -370,6 +552,32 @@
               return "--";
             }
             return `${value} mA`;
+          },
+
+          formatBytes(value) {
+            if (typeof value !== "number") {
+              return "--";
+            }
+            if (value < 1024) {
+              return `${value} B`;
+            }
+            if (value < 1024 * 1024) {
+              return `${(value / 1024).toFixed(1)} KB`;
+            }
+            return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+          },
+
+          audioStatusLabel() {
+            if (this.audio.status.playing) {
+              return "Playing";
+            }
+            if (this.audio.status.paused) {
+              return "Paused";
+            }
+            if (this.audio.status.current_track) {
+              return "Stopped";
+            }
+            return this.audio.status.available ? "Ready" : "Unavailable";
           },
         };
       }

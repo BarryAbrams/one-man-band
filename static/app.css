@@ -218,6 +218,12 @@ button:hover {
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
 }
 
+.audio-layout {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
 .tile {
   padding: 20px;
   text-align: left;
@@ -247,13 +253,22 @@ button:hover {
   min-height: 190px;
 }
 
+.audio-card {
+  padding: 20px;
+  background: #f8f3ea;
+  border: 1px solid rgba(78, 60, 33, 0.08);
+  border-radius: 24px;
+}
+
 .servo-card.active {
   background: linear-gradient(180deg, #eff9f4, #d9eee8);
   box-shadow: inset 0 0 0 1px rgba(31, 107, 90, 0.12);
 }
 
 .servo-header,
-.servo-scale {
+.servo-scale,
+.audio-status-row,
+.library-row {
   display: flex;
   justify-content: space-between;
   gap: 12px;
@@ -261,6 +276,11 @@ button:hover {
 
 .servo-header {
   align-items: flex-start;
+}
+
+.audio-status-row,
+.library-row {
+  align-items: center;
 }
 
 .pill-button {
@@ -293,6 +313,24 @@ button:hover {
   margin-top: 10px;
   color: var(--muted);
   font-size: 0.82rem;
+}
+
+.audio-library {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.library-row {
+  padding: 14px 16px;
+  background: #f8f3ea;
+  border: 1px solid rgba(78, 60, 33, 0.08);
+  border-radius: 18px;
+}
+
+.upload-form {
+  display: grid;
+  gap: 12px;
 }
 
 .telemetry-tile {
