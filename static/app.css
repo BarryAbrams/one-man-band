@@ -66,6 +66,15 @@ body {
   padding: 24px;
 }
 
+.system-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.system-card {
+  margin-top: 0;
+}
+
 .tab-bar {
   display: flex;
   gap: 10px;
@@ -261,6 +270,17 @@ button:hover {
   display: grid;
   gap: 16px;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.input-tile {
+  min-height: 180px;
+}
+
+.action-hint {
+  margin-top: 8px;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
 .tile {

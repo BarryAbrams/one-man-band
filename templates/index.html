@@ -15,27 +15,15 @@
           <p class="eyebrow">Closed-System Controller</p>
           <h1>One Man Band</h1>
           <p class="lede">
-            Browser-based control surface for rails, relays, servos, and Pi-side inputs.
+            Authoring and monitoring surface for the OMB, where inputs, outputs, motion, media, and future logic work together.
           </p>
-        </div>
-
-        <div class="status-card">
-          <div class="status-line">
-            <span class="label">Status</span>
-            <span class="badge" :class="state.connected ? 'ok' : 'error'" x-text="state.connected ? 'Connected' : 'Disconnected'"></span>
-          </div>
-          <p class="status-copy">
-            Control the system power rails, relays, servos, and GPIO inputs from a single local interface.
-          </p>
-          <template x-if="state.error">
-            <p class="error-text" x-text="state.error"></p>
-          </template>
         </div>
       </section>
 
       <section class="tab-bar" aria-label="Primary navigation">
         <button class="tab-button" :class="activeTab === 'power' ? 'active' : ''" @click="activeTab = 'power'">Power</button>
-        <button class="tab-button" :class="activeTab === 'io' ? 'active' : ''" @click="activeTab = 'io'">Inputs/Output</button>
+        <button class="tab-button" :class="activeTab === 'inputs' ? 'active' : ''" @click="activeTab = 'inputs'">Inputs</button>
+        <button class="tab-button" :class="activeTab === 'outputs' ? 'active' : ''" @click="activeTab = 'outputs'">Outputs</button>
         <button class="tab-button" :class="activeTab === 'media' ? 'active' : ''" @click="activeTab = 'media'">Media</button>
         <button class="tab-button" :class="activeTab === 'logic' ? 'active' : ''" @click="activeTab = 'logic'">Logic</button>
       </section>
@@ -45,7 +33,7 @@
           <div class="section-header">
             <p class="eyebrow">Power</p>
             <h2>Supply Control</h2>
-            <p class="section-copy">Manage the onboard power rails and watch the associated telemetry in one place.</p>
+            <p class="section-copy">Manage the OMB power rails and keep the power side close to the system telemetry.</p>
           </div>
           <div class="panel-header">
             <div></div>
@@ -93,28 +81,52 @@
             </template>
           </div>
         </section>
-      </section>
 
-      <section x-show="activeTab === 'io'" x-cloak class="tab-panel-stack">
         <section class="panel">
           <div class="section-header">
-            <p class="eyebrow">Onboard</p>
-            <h2>GPIO Inputs</h2>
-            <p class="section-copy">Monitor direct Raspberry Pi input lines wired into the system.</p>
+            <p class="eyebrow">Power</p>
+            <h2>System</h2>
+            <p class="section-copy">Monitor the current OMB state and any controller-side errors.</p>
+          </div>
+          <div class="system-grid">
+            <div class="status-card system-card">
+              <div class="status-line">
+                <span class="label">Status</span>
+                <span class="badge" :class="state.connected ? 'ok' : 'error'" x-text="state.connected ? 'Connected' : 'Disconnected'"></span>
+              </div>
+              <p class="status-copy">
+                The OMB control link and local runtime report here.
+              </p>
+              <template x-if="state.error">
+                <p class="error-text" x-text="state.error"></p>
+              </template>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <section x-show="activeTab === 'inputs'" x-cloak class="tab-panel-stack">
+        <section class="panel">
+          <div class="section-header">
+            <p class="eyebrow">Inputs</p>
+            <h2>Input Pins</h2>
+            <p class="section-copy">Monitor live input states and force overrides for authoring and testing.</p>
           </div>
           <div class="panel-header">
             <div></div>
             <div class="actions">
+              <button class="secondary" @click="clearAllInputOverrides()">Clear Overrides</button>
               <button class="secondary" @click="refresh()">Refresh</button>
             </div>
           </div>
           <div class="grid">
             <template x-for="name in meta.gpio_inputs || []" :key="name">
-              <div class="tile" :class="state.gpio_inputs_map[name] ? 'active' : ''">
+              <button class="tile input-tile" :class="state.gpio_inputs_map[name] ? 'active' : ''" @click="toggleInputOverride(name)">
                 <span class="tile-title" x-text="`Input ${name}`"></span>
-                <span class="tile-subtitle" x-text="`BCM ${meta.gpio_pins?.[name] ?? '?'}`"></span>
+                <span class="tile-subtitle" x-text="inputModeLabel(name)"></span>
                 <span class="tile-value" x-text="state.gpio_inputs_map[name] ? 'HIGH' : 'LOW'"></span>
-              </div>
+                <span class="tile-subtitle action-hint">Tap to toggle override</span>
+              </button>
             </template>
           </div>
           <template x-if="state.gpio_error">
@@ -124,9 +136,23 @@
 
         <section class="panel">
           <div class="section-header">
-            <p class="eyebrow">Onboard</p>
+            <p class="eyebrow">Inputs</p>
+            <h2>Offboard</h2>
+            <p class="section-copy">Reserved for network triggers, remote devices, and other incoming influences.</p>
+          </div>
+          <div class="placeholder-card">
+            <span class="tile-title">Items TBD</span>
+            <span class="tile-subtitle">Use this area later for network events, remote controls, and additional trigger sources.</span>
+          </div>
+        </section>
+      </section>
+
+      <section x-show="activeTab === 'outputs'" x-cloak class="tab-panel-stack">
+        <section class="panel">
+          <div class="section-header">
+            <p class="eyebrow">Outputs</p>
             <h2>12V Outputs</h2>
-            <p class="section-copy">Control the relay-driven 12V outputs on the RP2040 board.</p>
+            <p class="section-copy">Control the onboard 12V outputs.</p>
           </div>
           <div class="panel-header">
             <div></div>
@@ -147,9 +173,9 @@
 
         <section class="panel">
           <div class="section-header">
-            <p class="eyebrow">Onboard</p>
+            <p class="eyebrow">Outputs</p>
             <h2>Servos</h2>
-            <p class="section-copy">Enable channels and set 0–255 servo values for the first PCA9685 bank.</p>
+            <p class="section-copy">Control the onboard servo pins.</p>
           </div>
           <div class="panel-header">
             <div></div>
@@ -164,7 +190,6 @@
                 <div class="servo-header">
                   <div>
                     <span class="tile-title" x-text="`Servo ${channel}`"></span>
-                    <span class="tile-subtitle">PCA9685 channel</span>
                   </div>
                   <button
                     class="pill-button"
@@ -198,9 +223,9 @@
 
         <section class="panel">
           <div class="section-header">
-            <p class="eyebrow">Onboard</p>
+            <p class="eyebrow">Outputs</p>
             <h2>Neopixels</h2>
-            <p class="section-copy">Reserved for future onboard neopixel controls and animations.</p>
+            <p class="section-copy">Reserved for future OMB neopixel controls and animations.</p>
           </div>
           <div class="placeholder-card">
             <span class="tile-title">Coming Soon</span>
@@ -210,13 +235,13 @@
 
         <section class="panel">
           <div class="section-header">
-            <p class="eyebrow">Offboard</p>
+            <p class="eyebrow">Outputs</p>
             <h2>External Devices</h2>
-            <p class="section-copy">Placeholder for future offboard controls.</p>
+            <p class="section-copy">Placeholder for future offboard outputs and downstream devices.</p>
           </div>
           <div class="placeholder-card">
             <span class="tile-title">Items TBD</span>
-            <span class="tile-subtitle">Use this area later for external peripherals, buses, or expansion modules.</span>
+            <span class="tile-subtitle">Use this area later for external peripherals, buses, network targets, or expansion modules.</span>
           </div>
         </section>
       </section>
@@ -226,7 +251,7 @@
           <div class="section-header">
             <p class="eyebrow">Media</p>
             <h2>Audio</h2>
-            <p class="section-copy">Upload tracks to the Pi and play them locally through the DAC with pygame.</p>
+            <p class="section-copy">Upload tracks to the OMB and play them locally through the audio path.</p>
           </div>
           <div class="panel-header">
             <div></div>
@@ -298,7 +323,7 @@
           <div class="section-header">
             <p class="eyebrow">Logic</p>
             <h2>Future Automation</h2>
-            <p class="section-copy">Reserved for scenes, rules, sequencing, and higher-level control logic.</p>
+            <p class="section-copy">Reserved for scenes, rules, sequencing, and higher-level OMB control logic.</p>
           </div>
           <div class="placeholder-card logic-card">
             <span class="tile-title">Future Stuff</span>
@@ -350,6 +375,8 @@
             ina_voltage_map: {},
             ina_current_map: {},
             gpio_inputs_map: {},
+            gpio_physical_map: {},
+            gpio_override_map: {},
             gpio_error: "",
             audio_status: {},
           },
@@ -456,6 +483,24 @@
                 connected: false,
                 error: `Unable to load state: ${error.message}`,
               };
+            }
+          },
+
+          toggleInputOverride(name) {
+            if (this.state.gpio_override_map?.[name] !== undefined) {
+              if (this.socketConnected && this.socket) {
+                this.socket.emit("gpio:override_clear", { name });
+              }
+              return;
+            }
+            if (this.socketConnected && this.socket) {
+              this.socket.emit("gpio:override_toggle", { name });
+            }
+          },
+
+          clearAllInputOverrides() {
+            if (this.socketConnected && this.socket) {
+              this.socket.emit("gpio:override_clear_all");
             }
           },
 
@@ -638,6 +683,13 @@
               return "Stopped";
             }
             return this.audio.status.available ? "Ready" : "Unavailable";
+          },
+
+          inputModeLabel(name) {
+            if (this.state.gpio_override_map?.[name] !== undefined) {
+              return `Override: ${this.state.gpio_override_map[name] ? 'HIGH' : 'LOW'}`;
+            }
+            return "Live input";
           },
         };
       }

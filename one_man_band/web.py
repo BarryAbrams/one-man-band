@@ -161,6 +161,30 @@ def handle_servos_set_all(payload: dict[str, bool]):
     emit("state:update", state.to_payload(), broadcast=True)
 
 
+@socketio.on("gpio:override_toggle")
+def handle_gpio_override_toggle(payload: dict[str, str]):
+    try:
+        state = controller.toggle_gpio_override(payload["name"])
+        emit("state:update", {**state.to_payload(), "audio_status": audio_manager.status().to_payload()}, broadcast=True)
+    except (KeyError, ValueError) as exc:
+        emit("server:error", {"message": str(exc)})
+
+
+@socketio.on("gpio:override_clear")
+def handle_gpio_override_clear(payload: dict[str, str]):
+    try:
+        state = controller.clear_gpio_override(payload["name"])
+        emit("state:update", {**state.to_payload(), "audio_status": audio_manager.status().to_payload()}, broadcast=True)
+    except (KeyError, ValueError) as exc:
+        emit("server:error", {"message": str(exc)})
+
+
+@socketio.on("gpio:override_clear_all")
+def handle_gpio_override_clear_all():
+    state = controller.clear_all_gpio_overrides()
+    emit("state:update", {**state.to_payload(), "audio_status": audio_manager.status().to_payload()}, broadcast=True)
+
+
 @socketio.on("servo:set_enabled")
 def handle_servo_set_enabled(payload: dict[str, object]):
     try:

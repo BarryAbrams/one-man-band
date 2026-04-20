@@ -97,6 +97,7 @@ class DeviceState:
     error: str = ""
     backend: str = "disconnected"
     gpio_inputs: dict[str, bool] | None = None
+    gpio_input_overrides: dict[str, bool] | None = None
     gpio_error: str = ""
 
     def to_payload(self) -> dict[str, object]:
@@ -119,7 +120,11 @@ class DeviceState:
             },
             "ina_voltage_map": self.ina_voltage_mv or {},
             "ina_current_map": self.ina_current_ma or {},
-            "gpio_inputs_map": self.gpio_inputs or {},
+            "gpio_inputs_map": {
+                name: self._gpio_value(name) for name in GPIO_INPUTS
+            },
+            "gpio_physical_map": self.gpio_inputs or {},
+            "gpio_override_map": self.gpio_input_overrides or {},
         }
 
     def _servo_value(self, channel: int) -> int:
@@ -127,10 +132,17 @@ class DeviceState:
             return 0
         return int(self.servo_values[channel])
 
+    def _gpio_value(self, name: str) -> bool:
+        if self.gpio_input_overrides and name in self.gpio_input_overrides:
+            return bool(self.gpio_input_overrides[name])
+        if self.gpio_inputs and name in self.gpio_inputs:
+            return bool(self.gpio_inputs[name])
+        return False
+
 
 class DeviceController:
     def __init__(self) -> None:
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._mock_mode = os.environ.get("OMB_MOCK_HARDWARE", "0") == "1"
         self._gpio_mode = os.environ.get("OMB_GPIO_PULL", "off").strip().lower()
         self._gpio_ready = False
@@ -144,6 +156,7 @@ class DeviceController:
             ina_voltage_mv={"12V_C": 0, "8V": 8000},
             ina_current_ma={"12V_C": 0, "8V": 0},
             gpio_inputs={name: False for name in GPIO_INPUTS},
+            gpio_input_overrides={},
         )
         self._setup_gpio()
 
@@ -332,6 +345,45 @@ class DeviceController:
 
     def clear_solenoids(self) -> DeviceState:
         return self._update_register(REG_SOLENOIDS, 0x00)
+
+    def toggle_gpio_override(self, name: str) -> DeviceState:
+        if name not in GPIO_INPUTS:
+            raise ValueError(f"Unknown input pin: {name}")
+        with self._lock:
+            state = self.read_state()
+            current_override = None
+            if state.gpio_input_overrides:
+                current_override = state.gpio_input_overrides.get(name)
+            physical_value = False
+            if state.gpio_inputs:
+                physical_value = bool(state.gpio_inputs.get(name, False))
+
+            if current_override is None:
+                next_value = not physical_value
+            else:
+                next_value = not bool(current_override)
+
+            if self._state.gpio_input_overrides is None:
+                self._state.gpio_input_overrides = {}
+            self._state.gpio_input_overrides[name] = next_value
+            return DeviceState(**asdict(self._state))
+
+    def clear_gpio_override(self, name: str) -> DeviceState:
+        if name not in GPIO_INPUTS:
+            raise ValueError(f"Unknown input pin: {name}")
+        with self._lock:
+            state = self.read_state()
+            overrides = dict(state.gpio_input_overrides or {})
+            overrides.pop(name, None)
+            self._state.gpio_input_overrides = overrides
+            return DeviceState(**asdict(self._state))
+
+    def clear_all_gpio_overrides(self) -> DeviceState:
+        with self._lock:
+            state = self.read_state()
+            self._state = DeviceState(**asdict(state))
+            self._state.gpio_input_overrides = {}
+            return DeviceState(**asdict(self._state))
 
     def set_servo_enabled(self, channel: int, enabled: bool) -> DeviceState:
         if channel not in SERVO_CHANNELS:
