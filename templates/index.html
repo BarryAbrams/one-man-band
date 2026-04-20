@@ -33,219 +33,278 @@
         </div>
       </section>
 
-      <section class="panel">
-        <div class="panel-header">
-          <div>
-            <p class="eyebrow">Power Rails</p>
+      <section class="tab-bar" aria-label="Primary navigation">
+        <button class="tab-button" :class="activeTab === 'power' ? 'active' : ''" @click="activeTab = 'power'">Power</button>
+        <button class="tab-button" :class="activeTab === 'io' ? 'active' : ''" @click="activeTab = 'io'">Inputs/Output</button>
+        <button class="tab-button" :class="activeTab === 'media' ? 'active' : ''" @click="activeTab = 'media'">Media</button>
+        <button class="tab-button" :class="activeTab === 'logic' ? 'active' : ''" @click="activeTab = 'logic'">Logic</button>
+      </section>
+
+      <section x-show="activeTab === 'power'" x-cloak class="tab-panel-stack">
+        <section class="panel">
+          <div class="section-header">
+            <p class="eyebrow">Power</p>
             <h2>Supply Control</h2>
+            <p class="section-copy">Manage the onboard power rails and watch the associated telemetry in one place.</p>
           </div>
-          <div class="actions">
-            <button class="secondary" @click="setAllRails(true)">All On</button>
-            <button class="secondary" @click="setAllRails(false)">All Off</button>
+          <div class="panel-header">
+            <div></div>
+            <div class="actions">
+              <button class="secondary" @click="setAllRails(true)">All On</button>
+              <button class="secondary" @click="setAllRails(false)">All Off</button>
+              <button class="secondary" @click="refresh()">Refresh</button>
+            </div>
           </div>
-        </div>
-        <div class="grid">
-          <template x-for="name in meta.rails" :key="name">
-            <button class="tile" :class="state.rails_map[name] ? 'active' : ''" @click="toggleRail(name)">
-              <span class="tile-title" x-text="railLabels[name]?.title || name"></span>
-              <span class="tile-subtitle" x-text="railLabels[name]?.subtitle || ''"></span>
-              <span class="tile-value" x-text="state.rails_map[name] ? 'ON' : 'OFF'"></span>
-            </button>
-          </template>
-        </div>
-      </section>
+          <div class="grid">
+            <template x-for="name in meta.rails" :key="name">
+              <button class="tile" :class="state.rails_map[name] ? 'active' : ''" @click="toggleRail(name)">
+                <span class="tile-title" x-text="railLabels[name]?.title || name"></span>
+                <span class="tile-subtitle" x-text="railLabels[name]?.subtitle || ''"></span>
+                <span class="tile-value" x-text="state.rails_map[name] ? 'ON' : 'OFF'"></span>
+              </button>
+            </template>
+          </div>
+        </section>
 
-      <section class="panel">
-        <div class="panel-header">
-          <div>
-            <h2>Relays</h2>
+        <section class="panel">
+          <div class="section-header">
+            <p class="eyebrow">Power</p>
+            <h2>INA260 Telemetry</h2>
+            <p class="section-copy">Track voltage and current on the solenoid and servo lines.</p>
           </div>
-          <div class="actions">
-            <button class="secondary" @click="clearSolenoids()">Clear All</button>
-            <button class="secondary" @click="refresh()">Refresh</button>
-          </div>
-        </div>
-        <div class="grid">
-          <template x-for="name in meta.solenoids" :key="name">
-            <button class="tile" :class="state.solenoids_map[name] ? 'active warm' : ''" @click="toggleSolenoid(name)">
-              <span class="tile-title" x-text="relayLabels[name] || name"></span>
-              <span class="tile-value" x-text="state.solenoids_map[name] ? 'ENGAGED' : 'IDLE'"></span>
-            </button>
-          </template>
-        </div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-header">
-          <div>
-            <p class="eyebrow">Motion</p>
-            <h2>Servos</h2>
-          </div>
-          <div class="actions">
-            <button class="secondary" @click="setAllServos(true)">Enable All</button>
-            <button class="secondary" @click="setAllServos(false)">Disable All</button>
-          </div>
-        </div>
-        <div class="servo-grid">
-          <template x-for="channel in meta.servos || []" :key="channel">
-            <section class="servo-card" :class="state.servo_enabled_map[String(channel)] ? 'active' : ''">
-              <div class="servo-header">
+          <div class="grid">
+            <template x-for="channel in Object.values(meta.ina_channels || {})" :key="channel.key">
+              <section class="tile telemetry-tile" :class="state.ina_present_map[channel.key] ? 'active' : ''">
                 <div>
-                  <span class="tile-title" x-text="`Servo ${channel}`"></span>
-                  <span class="tile-subtitle">PCA9685 channel</span>
+                  <span class="tile-title" x-text="channel.title"></span>
+                  <span class="tile-subtitle" x-text="state.ina_present_map[channel.key] ? 'Sensor present' : 'Sensor not detected'"></span>
                 </div>
-                <button
-                  class="pill-button"
-                  :class="state.servo_enabled_map[String(channel)] ? 'active' : ''"
-                  @click="toggleServoEnabled(channel)"
-                  x-text="state.servo_enabled_map[String(channel)] ? 'Enabled' : 'Disabled'"
-                ></button>
+                <div class="telemetry-readings">
+                  <div class="reading-row">
+                    <span class="reading-label">Voltage</span>
+                    <strong class="reading-value" x-text="formatVoltage(state.ina_voltage_map[channel.key])"></strong>
+                  </div>
+                  <div class="reading-row">
+                    <span class="reading-label">Current</span>
+                    <strong class="reading-value" x-text="formatCurrent(state.ina_current_map[channel.key])"></strong>
+                  </div>
+                </div>
+              </section>
+            </template>
+          </div>
+        </section>
+      </section>
+
+      <section x-show="activeTab === 'io'" x-cloak class="tab-panel-stack">
+        <section class="panel">
+          <div class="section-header">
+            <p class="eyebrow">Onboard</p>
+            <h2>GPIO Inputs</h2>
+            <p class="section-copy">Monitor direct Raspberry Pi input lines wired into the system.</p>
+          </div>
+          <div class="panel-header">
+            <div></div>
+            <div class="actions">
+              <button class="secondary" @click="refresh()">Refresh</button>
+            </div>
+          </div>
+          <div class="grid">
+            <template x-for="name in meta.gpio_inputs || []" :key="name">
+              <div class="tile" :class="state.gpio_inputs_map[name] ? 'active' : ''">
+                <span class="tile-title" x-text="`Input ${name}`"></span>
+                <span class="tile-subtitle" x-text="`BCM ${meta.gpio_pins?.[name] ?? '?'}`"></span>
+                <span class="tile-value" x-text="state.gpio_inputs_map[name] ? 'HIGH' : 'LOW'"></span>
               </div>
-              <label class="servo-label" :for="`servo-${channel}`">
-                Value <span x-text="servoDrafts[String(channel)] ?? state.servo_values_map[String(channel)] ?? 0"></span>
+            </template>
+          </div>
+          <template x-if="state.gpio_error">
+            <p class="error-text panel-note" x-text="state.gpio_error"></p>
+          </template>
+        </section>
+
+        <section class="panel">
+          <div class="section-header">
+            <p class="eyebrow">Onboard</p>
+            <h2>12V Outputs</h2>
+            <p class="section-copy">Control the relay-driven 12V outputs on the RP2040 board.</p>
+          </div>
+          <div class="panel-header">
+            <div></div>
+            <div class="actions">
+              <button class="secondary" @click="clearSolenoids()">Clear All</button>
+              <button class="secondary" @click="refresh()">Refresh</button>
+            </div>
+          </div>
+          <div class="grid">
+            <template x-for="name in meta.solenoids" :key="name">
+              <button class="tile" :class="state.solenoids_map[name] ? 'active warm' : ''" @click="toggleSolenoid(name)">
+                <span class="tile-title" x-text="relayLabels[name] || name"></span>
+                <span class="tile-value" x-text="state.solenoids_map[name] ? 'ENGAGED' : 'IDLE'"></span>
+              </button>
+            </template>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="section-header">
+            <p class="eyebrow">Onboard</p>
+            <h2>Servos</h2>
+            <p class="section-copy">Enable channels and set 0–255 servo values for the first PCA9685 bank.</p>
+          </div>
+          <div class="panel-header">
+            <div></div>
+            <div class="actions">
+              <button class="secondary" @click="setAllServos(true)">Enable All</button>
+              <button class="secondary" @click="setAllServos(false)">Disable All</button>
+            </div>
+          </div>
+          <div class="servo-grid">
+            <template x-for="channel in meta.servos || []" :key="channel">
+              <section class="servo-card" :class="state.servo_enabled_map[String(channel)] ? 'active' : ''">
+                <div class="servo-header">
+                  <div>
+                    <span class="tile-title" x-text="`Servo ${channel}`"></span>
+                    <span class="tile-subtitle">PCA9685 channel</span>
+                  </div>
+                  <button
+                    class="pill-button"
+                    :class="state.servo_enabled_map[String(channel)] ? 'active' : ''"
+                    @click="toggleServoEnabled(channel)"
+                    x-text="state.servo_enabled_map[String(channel)] ? 'Enabled' : 'Disabled'"
+                  ></button>
+                </div>
+                <label class="servo-label" :for="`servo-${channel}`">
+                  Value <span x-text="servoDrafts[String(channel)] ?? state.servo_values_map[String(channel)] ?? 0"></span>
+                </label>
+                <input
+                  class="servo-slider"
+                  type="range"
+                  min="0"
+                  max="255"
+                  :id="`servo-${channel}`"
+                  :value="servoDrafts[String(channel)] ?? state.servo_values_map[String(channel)] ?? 0"
+                  @input="servoDrafts[String(channel)] = Number($event.target.value)"
+                  @change="setServoValue(channel, servoDrafts[String(channel)] ?? Number($event.target.value))"
+                >
+                <div class="servo-scale">
+                  <span>0</span>
+                  <span>127</span>
+                  <span>255</span>
+                </div>
+              </section>
+            </template>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="section-header">
+            <p class="eyebrow">Onboard</p>
+            <h2>Neopixels</h2>
+            <p class="section-copy">Reserved for future onboard neopixel controls and animations.</p>
+          </div>
+          <div class="placeholder-card">
+            <span class="tile-title">Coming Soon</span>
+            <span class="tile-subtitle">This tab is reserved for neopixel scenes, color selection, and testing tools.</span>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="section-header">
+            <p class="eyebrow">Offboard</p>
+            <h2>External Devices</h2>
+            <p class="section-copy">Placeholder for future offboard controls.</p>
+          </div>
+          <div class="placeholder-card">
+            <span class="tile-title">Items TBD</span>
+            <span class="tile-subtitle">Use this area later for external peripherals, buses, or expansion modules.</span>
+          </div>
+        </section>
+      </section>
+
+      <section x-show="activeTab === 'media'" x-cloak class="tab-panel-stack">
+        <section class="panel">
+          <div class="section-header">
+            <p class="eyebrow">Media</p>
+            <h2>Audio</h2>
+            <p class="section-copy">Upload tracks to the Pi and play them locally through the DAC with pygame.</p>
+          </div>
+          <div class="panel-header">
+            <div></div>
+            <div class="actions">
+              <button class="secondary" @click="loadAudioLibrary()">Refresh Library</button>
+            </div>
+          </div>
+          <div class="audio-layout">
+            <section class="audio-card">
+              <form class="upload-form" @submit.prevent="uploadAudio">
+                <label class="tile-subtitle" for="audio-file">Upload audio file</label>
+                <input id="audio-file" type="file" accept=".wav,.mp3,.ogg,audio/wav,audio/mpeg,audio/ogg" @change="setUploadFile">
+                <button class="secondary" type="submit" :disabled="uploading || !uploadFile">
+                  <span x-text="uploading ? 'Uploading...' : 'Upload Audio'"></span>
+                </button>
+              </form>
+              <p class="tile-subtitle" x-text="`Accepted: ${(meta.audio_extensions || []).join(', ')}`"></p>
+              <template x-if="audio.status.error">
+                <p class="error-text panel-note" x-text="audio.status.error"></p>
+              </template>
+            </section>
+
+            <section class="audio-card">
+              <div class="audio-status-row">
+                <div>
+                  <span class="tile-title">Now Playing</span>
+                  <span class="tile-subtitle" x-text="audio.status.current_track || 'Nothing loaded'"></span>
+                </div>
+                <strong class="reading-value" x-text="audioStatusLabel()"></strong>
+              </div>
+              <div class="actions">
+                <button class="secondary" @click="resumeAudio()" :disabled="!audio.status.paused">Resume</button>
+                <button class="secondary" @click="pauseAudio()" :disabled="!audio.status.playing">Pause</button>
+                <button class="secondary" @click="stopAudio()" :disabled="!audio.status.current_track">Stop</button>
+              </div>
+              <label class="servo-label" for="audio-volume">
+                Volume <span x-text="Math.round((audio.status.volume || 0) * 100) + '%'"></span>
               </label>
               <input
+                id="audio-volume"
                 class="servo-slider"
                 type="range"
                 min="0"
-                max="255"
-                :id="`servo-${channel}`"
-                :value="servoDrafts[String(channel)] ?? state.servo_values_map[String(channel)] ?? 0"
-                @input="servoDrafts[String(channel)] = Number($event.target.value)"
-                @change="setServoValue(channel, servoDrafts[String(channel)] ?? Number($event.target.value))"
+                max="100"
+                :value="Math.round((audio.status.volume || 0) * 100)"
+                @change="setAudioVolume(Number($event.target.value) / 100)"
               >
-              <div class="servo-scale">
-                <span>0</span>
-                <span>127</span>
-                <span>255</span>
-              </div>
             </section>
-          </template>
-        </div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-header">
-          <div>
-            <p class="eyebrow">Power Monitor</p>
-            <h2>INA260 Telemetry</h2>
           </div>
-          <div class="actions">
-            <button class="secondary" @click="refresh()">Refresh</button>
-          </div>
-        </div>
-        <div class="grid">
-          <template x-for="channel in Object.values(meta.ina_channels || {})" :key="channel.key">
-            <section class="tile telemetry-tile" :class="state.ina_present_map[channel.key] ? 'active' : ''">
-              <div>
-                <span class="tile-title" x-text="channel.title"></span>
-                <span class="tile-subtitle" x-text="state.ina_present_map[channel.key] ? 'Sensor present' : 'Sensor not detected'"></span>
-              </div>
-              <div class="telemetry-readings">
-                <div class="reading-row">
-                  <span class="reading-label">Voltage</span>
-                  <strong class="reading-value" x-text="formatVoltage(state.ina_voltage_map[channel.key])"></strong>
-                </div>
-                <div class="reading-row">
-                  <span class="reading-label">Current</span>
-                  <strong class="reading-value" x-text="formatCurrent(state.ina_current_map[channel.key])"></strong>
-                </div>
-              </div>
-            </section>
-          </template>
-        </div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-header">
-          <div>
-            <p class="eyebrow">Audio</p>
-            <h2>Playback</h2>
-          </div>
-          <div class="actions">
-            <button class="secondary" @click="loadAudioLibrary()">Refresh Library</button>
-          </div>
-        </div>
-        <div class="audio-layout">
-          <section class="audio-card">
-            <form class="upload-form" @submit.prevent="uploadAudio">
-              <label class="tile-subtitle" for="audio-file">Upload audio file</label>
-              <input id="audio-file" type="file" accept=".wav,.mp3,.ogg,audio/wav,audio/mpeg,audio/ogg" @change="setUploadFile">
-              <button class="secondary" type="submit" :disabled="uploading || !uploadFile">
-                <span x-text="uploading ? 'Uploading...' : 'Upload Audio'"></span>
-              </button>
-            </form>
-            <p class="tile-subtitle" x-text="`Accepted: ${(meta.audio_extensions || []).join(', ')}`"></p>
-            <template x-if="audio.status.error">
-              <p class="error-text panel-note" x-text="audio.status.error"></p>
+          <div class="audio-library">
+            <template x-if="!audio.tracks.length">
+              <p class="tile-subtitle">No audio files uploaded yet.</p>
             </template>
-          </section>
-
-          <section class="audio-card">
-            <div class="audio-status-row">
-              <div>
-                <span class="tile-title">Now Playing</span>
-                <span class="tile-subtitle" x-text="audio.status.current_track || 'Nothing loaded'"></span>
+            <template x-for="track in audio.tracks" :key="track.name">
+              <div class="library-row">
+                <div>
+                  <span class="tile-title" x-text="track.name"></span>
+                  <span class="tile-subtitle" x-text="formatBytes(track.size_bytes)"></span>
+                </div>
+                <button class="pill-button active" @click="playAudio(track.name)">Play</button>
               </div>
-              <strong class="reading-value" x-text="audioStatusLabel()"></strong>
-            </div>
-            <div class="actions">
-              <button class="secondary" @click="resumeAudio()" :disabled="!audio.status.paused">Resume</button>
-              <button class="secondary" @click="pauseAudio()" :disabled="!audio.status.playing">Pause</button>
-              <button class="secondary" @click="stopAudio()" :disabled="!audio.status.current_track">Stop</button>
-            </div>
-            <label class="servo-label" for="audio-volume">
-              Volume <span x-text="Math.round((audio.status.volume || 0) * 100) + '%'"></span>
-            </label>
-            <input
-              id="audio-volume"
-              class="servo-slider"
-              type="range"
-              min="0"
-              max="100"
-              :value="Math.round((audio.status.volume || 0) * 100)"
-              @change="setAudioVolume(Number($event.target.value) / 100)"
-            >
-          </section>
-        </div>
-        <div class="audio-library">
-          <template x-if="!audio.tracks.length">
-            <p class="tile-subtitle">No audio files uploaded yet.</p>
-          </template>
-          <template x-for="track in audio.tracks" :key="track.name">
-            <div class="library-row">
-              <div>
-                <span class="tile-title" x-text="track.name"></span>
-                <span class="tile-subtitle" x-text="formatBytes(track.size_bytes)"></span>
-              </div>
-              <button class="pill-button active" @click="playAudio(track.name)">Play</button>
-            </div>
-          </template>
-        </div>
+            </template>
+          </div>
+        </section>
       </section>
 
-      <section class="panel">
-        <div class="panel-header">
-          <div>
-            <p class="eyebrow">Inputs</p>
-            <h2>Pi GPIO Inputs</h2>
+      <section x-show="activeTab === 'logic'" x-cloak class="tab-panel-stack">
+        <section class="panel">
+          <div class="section-header">
+            <p class="eyebrow">Logic</p>
+            <h2>Future Automation</h2>
+            <p class="section-copy">Reserved for scenes, rules, sequencing, and higher-level control logic.</p>
           </div>
-          <div class="actions">
-            <button class="secondary" @click="refresh()">Refresh</button>
+          <div class="placeholder-card logic-card">
+            <span class="tile-title">Future Stuff</span>
+            <span class="tile-subtitle">This area is ready for presets, timed actions, sensor logic, or song-driven automation later on.</span>
           </div>
-        </div>
-        <div class="grid">
-          <template x-for="name in meta.gpio_inputs || []" :key="name">
-            <div class="tile" :class="state.gpio_inputs_map[name] ? 'active' : ''">
-              <span class="tile-title" x-text="`Input ${name}`"></span>
-              <span class="tile-subtitle" x-text="`BCM ${meta.gpio_pins?.[name] ?? '?'}`"></span>
-              <span class="tile-value" x-text="state.gpio_inputs_map[name] ? 'HIGH' : 'LOW'"></span>
-            </div>
-          </template>
-        </div>
-        <template x-if="state.gpio_error">
-          <p class="error-text panel-note" x-text="state.gpio_error"></p>
-        </template>
+        </section>
       </section>
 
     </main>
@@ -310,6 +369,7 @@
           socketConnected: false,
           pollHandle: null,
           servoDrafts: {},
+          activeTab: "power",
           uploadFile: null,
           uploading: false,
 

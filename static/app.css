@@ -33,6 +33,10 @@ body {
   padding: 32px 0 48px;
 }
 
+[x-cloak] {
+  display: none !important;
+}
+
 .hero,
 .split {
   display: grid;
@@ -60,6 +64,31 @@ body {
 .panel {
   margin-top: 20px;
   padding: 24px;
+}
+
+.tab-bar {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 24px;
+}
+
+.tab-button {
+  padding: 12px 18px;
+  background: rgba(255, 252, 246, 0.72);
+  border: 1px solid var(--panel-border);
+  color: var(--text);
+}
+
+.tab-button.active {
+  background: var(--accent);
+  color: #fffdf8;
+  box-shadow: var(--shadow);
+}
+
+.tab-panel-stack {
+  display: grid;
+  gap: 0;
 }
 
 .compact {
@@ -110,6 +139,16 @@ h2 {
 
 .panel-note {
   margin: 16px 0 0;
+}
+
+.section-header {
+  margin-bottom: 18px;
+}
+
+.section-copy {
+  margin: 10px 0 0;
+  color: var(--muted);
+  line-height: 1.6;
 }
 
 .status-line,
@@ -260,6 +299,28 @@ button:hover {
   border-radius: 24px;
 }
 
+.placeholder-card {
+  padding: 24px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.55), rgba(239, 229, 216, 0.55)),
+    repeating-linear-gradient(
+      -45deg,
+      rgba(183, 93, 45, 0.06),
+      rgba(183, 93, 45, 0.06) 10px,
+      transparent 10px,
+      transparent 20px
+    );
+  border: 1px dashed rgba(78, 60, 33, 0.18);
+  border-radius: 24px;
+  display: grid;
+  gap: 10px;
+}
+
+.logic-card {
+  min-height: 220px;
+  align-content: center;
+}
+
 .servo-card.active {
   background: linear-gradient(180deg, #eff9f4, #d9eee8);
   box-shadow: inset 0 0 0 1px rgba(31, 107, 90, 0.12);
@@ -404,5 +465,14 @@ button:hover {
   .panel-header {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .tab-bar {
+    gap: 8px;
+  }
+
+  .tab-button {
+    width: 100%;
+    justify-content: center;
   }
 }
