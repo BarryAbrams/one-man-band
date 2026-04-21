@@ -30,6 +30,7 @@ REG_INA0_VOLTAGE_L: Final[int] = 0x20
 REG_INA0_CURRENT_L: Final[int] = 0x22
 REG_INA1_VOLTAGE_L: Final[int] = 0x24
 REG_INA1_CURRENT_L: Final[int] = 0x26
+REG_PIXEL_COMMAND: Final[int] = 0x40
 
 RAILS: Final[dict[str, int]] = {
     "12V_A": 1 << 0,
@@ -81,6 +82,13 @@ GPIO_INPUTS: Final[dict[str, int]] = {
 
 SERVO_CHANNELS: Final[tuple[int, ...]] = tuple(range(8))
 
+PIXEL_RAILS: Final[dict[str, int]] = {
+    "1": 1 << 0,
+    "2": 1 << 1,
+    "3": 1 << 2,
+    "4": 1 << 3,
+}
+
 
 @dataclass(slots=True)
 class DeviceState:
@@ -99,6 +107,7 @@ class DeviceState:
     gpio_inputs: dict[str, bool] | None = None
     gpio_input_overrides: dict[str, bool] | None = None
     gpio_error: str = ""
+    pixel_command: dict[str, object] | None = None
 
     def to_payload(self) -> dict[str, object]:
         return {
@@ -125,6 +134,7 @@ class DeviceState:
             },
             "gpio_physical_map": self.gpio_inputs or {},
             "gpio_override_map": self.gpio_input_overrides or {},
+            "pixel_command": self.pixel_command or {},
         }
 
     def _servo_value(self, channel: int) -> int:
@@ -157,6 +167,7 @@ class DeviceController:
             ina_current_ma={"12V_C": 0, "8V": 0},
             gpio_inputs={name: False for name in GPIO_INPUTS},
             gpio_input_overrides={},
+            pixel_command={},
         )
         self._setup_gpio()
 
@@ -209,6 +220,9 @@ class DeviceController:
 
     def _write_reg(self, bus: SMBus, reg: int, value: int) -> None:
         bus.write_i2c_block_data(DEVICE, reg, [value & 0xFF])
+
+    def _write_block(self, bus: SMBus, reg: int, values: list[int]) -> None:
+        bus.write_i2c_block_data(DEVICE, reg, [value & 0xFF for value in values])
 
     def _read_u16_le(self, bus: SMBus, reg_low: int) -> int:
         low = self._read_reg(bus, reg_low)
@@ -273,17 +287,25 @@ class DeviceController:
 
     def read_state(self) -> DeviceState:
         with self._lock:
+            overrides = dict(self._state.gpio_input_overrides or {})
+            pixel_command = dict(self._state.pixel_command or {})
             if self._mock_mode:
                 self._state.connected = True
                 self._state.backend = "mock"
                 self._state.gpio_inputs, self._state.gpio_error = self._read_gpio_inputs()
+                self._state.gpio_input_overrides = overrides
+                self._state.pixel_command = pixel_command
                 return DeviceState(**asdict(self._state))
 
             self._state = self._read_from_bus()
+            self._state.gpio_input_overrides = overrides
+            self._state.pixel_command = pixel_command
             return DeviceState(**asdict(self._state))
 
     def _update_register(self, reg: int, value: int) -> DeviceState:
         with self._lock:
+            overrides = dict(self._state.gpio_input_overrides or {})
+            pixel_command = dict(self._state.pixel_command or {})
             if self._mock_mode:
                 if reg == REG_RAILS:
                     self._state.rails = value & 0x0F
@@ -298,6 +320,8 @@ class DeviceController:
                 self._state.connected = True
                 self._state.error = ""
                 self._state.gpio_inputs, self._state.gpio_error = self._read_gpio_inputs()
+                self._state.gpio_input_overrides = overrides
+                self._state.pixel_command = pixel_command
                 return DeviceState(**asdict(self._state))
 
             if SMBus is None:
@@ -308,6 +332,8 @@ class DeviceController:
                     backend="unavailable",
                     gpio_inputs=gpio_inputs,
                     gpio_error=gpio_error,
+                    gpio_input_overrides=overrides,
+                    pixel_command=pixel_command,
                 )
                 return DeviceState(**asdict(self._state))
 
@@ -315,6 +341,8 @@ class DeviceController:
                 with SMBus(I2C_BUS) as bus:
                     self._write_reg(bus, reg, value)
                 self._state = self._read_from_bus()
+                self._state.gpio_input_overrides = overrides
+                self._state.pixel_command = pixel_command
             except OSError as exc:
                 gpio_inputs, gpio_error = self._read_gpio_inputs()
                 self._state = DeviceState(
@@ -323,6 +351,8 @@ class DeviceController:
                     backend="i2c",
                     gpio_inputs=gpio_inputs,
                     gpio_error=gpio_error,
+                    gpio_input_overrides=overrides,
+                    pixel_command=pixel_command,
                 )
             return DeviceState(**asdict(self._state))
 
@@ -403,11 +433,115 @@ class DeviceController:
             raise ValueError(f"Servo value must be between 0 and 255: {value}")
         return self._update_register(REG_SERVO_BASE + channel, value)
 
+    def animate_pixels(
+        self,
+        rail_mask: int,
+        start: int,
+        count: int,
+        start_rgb: tuple[int, int, int],
+        end_rgb: tuple[int, int, int],
+        duration_ms: int,
+        animation_id: int = 0,
+    ) -> DeviceState:
+        if not 0 <= rail_mask <= 0x0F or rail_mask == 0:
+            raise ValueError("Select at least one pixel rail")
+        if not 0 <= start <= 99:
+            raise ValueError(f"Start pixel must be between 0 and 99: {start}")
+        if not 0 <= count <= 100:
+            raise ValueError(f"Pixel count must be between 0 and 100: {count}")
+        if not 0 <= duration_ms <= 65535:
+            raise ValueError(f"Duration must be between 0 and 65535 ms: {duration_ms}")
+        if not 0 <= animation_id <= 255:
+            raise ValueError(f"Animation ID must be between 0 and 255: {animation_id}")
+        for channel_name, rgb in (("start", start_rgb), ("end", end_rgb)):
+            if len(rgb) != 3:
+                raise ValueError(f"{channel_name} color must have red, green, and blue values")
+            if any(value < 0 or value > 255 for value in rgb):
+                raise ValueError(f"{channel_name} color values must be between 0 and 255")
+
+        payload = [
+            rail_mask,
+            start,
+            count,
+            *start_rgb,
+            *end_rgb,
+            duration_ms & 0xFF,
+            (duration_ms >> 8) & 0xFF,
+            1,
+            animation_id,
+        ]
+
+        with self._lock:
+            if self._mock_mode:
+                self._state.pixel_command = self._pixel_command_payload(
+                    rail_mask, start, count, start_rgb, end_rgb, duration_ms, animation_id
+                )
+                return DeviceState(**asdict(self._state))
+
+            if SMBus is None:
+                gpio_inputs, gpio_error = self._read_gpio_inputs()
+                self._state = DeviceState(
+                    connected=False,
+                    error="smbus2 is not installed",
+                    backend="unavailable",
+                    gpio_inputs=gpio_inputs,
+                    gpio_error=gpio_error,
+                    gpio_input_overrides=dict(self._state.gpio_input_overrides or {}),
+                    pixel_command=dict(self._state.pixel_command or {}),
+                )
+                return DeviceState(**asdict(self._state))
+
+            try:
+                with SMBus(I2C_BUS) as bus:
+                    self._write_block(bus, REG_PIXEL_COMMAND, payload)
+                next_state = self._read_from_bus()
+                next_state.gpio_input_overrides = dict(self._state.gpio_input_overrides or {})
+                next_state.pixel_command = self._pixel_command_payload(
+                    rail_mask, start, count, start_rgb, end_rgb, duration_ms, animation_id
+                )
+                self._state = next_state
+            except OSError as exc:
+                gpio_inputs, gpio_error = self._read_gpio_inputs()
+                self._state = DeviceState(
+                    connected=False,
+                    error=str(exc),
+                    backend="i2c",
+                    gpio_inputs=gpio_inputs,
+                    gpio_error=gpio_error,
+                    gpio_input_overrides=dict(self._state.gpio_input_overrides or {}),
+                    pixel_command=dict(self._state.pixel_command or {}),
+                )
+            return DeviceState(**asdict(self._state))
+
+    def _pixel_command_payload(
+        self,
+        rail_mask: int,
+        start: int,
+        count: int,
+        start_rgb: tuple[int, int, int],
+        end_rgb: tuple[int, int, int],
+        duration_ms: int,
+        animation_id: int,
+    ) -> dict[str, object]:
+        return {
+            "rail_mask": rail_mask,
+            "rails": [
+                name for name, mask in PIXEL_RAILS.items() if rail_mask & mask
+            ],
+            "start": start,
+            "count": count,
+            "start_rgb": list(start_rgb),
+            "end_rgb": list(end_rgb),
+            "duration_ms": duration_ms,
+            "animation_id": animation_id,
+        }
+
     def metadata(self) -> dict[str, object]:
         return {
             "rails": list(RAILS.keys()),
             "solenoids": list(SOLENOIDS.keys()),
             "servos": list(SERVO_CHANNELS),
+            "pixel_rails": list(PIXEL_RAILS.keys()),
             "ina_channels": {
                 name: {
                     "title": str(config["title"]),

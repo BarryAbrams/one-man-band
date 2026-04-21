@@ -225,11 +225,59 @@
           <div class="section-header">
             <p class="eyebrow">Outputs</p>
             <h2>Neopixels</h2>
-            <p class="section-copy">Reserved for future OMB neopixel controls and animations.</p>
+            <p class="section-copy">Send smooth color fades to one or more OMB pixel rails.</p>
           </div>
-          <div class="placeholder-card">
-            <span class="tile-title">Coming Soon</span>
-            <span class="tile-subtitle">This tab is reserved for neopixel scenes, color selection, and testing tools.</span>
+          <div class="pixel-layout">
+            <section class="audio-card">
+              <span class="tile-title">Pixel Rails</span>
+              <div class="rail-picker">
+                <template x-for="rail in meta.pixel_rails || []" :key="rail">
+                  <button
+                    class="pill-button"
+                    :class="pixels.rails.includes(rail) ? 'active' : ''"
+                    @click="togglePixelRail(rail)"
+                    x-text="`PIX ${rail}`"
+                  ></button>
+                </template>
+              </div>
+              <div class="pixel-fields">
+                <label class="field-label" for="pixel-start">
+                  Start Pixel
+                  <input id="pixel-start" type="number" min="0" max="99" x-model.number="pixels.start">
+                </label>
+                <label class="field-label" for="pixel-count">
+                  Count
+                  <input id="pixel-count" type="number" min="0" max="100" x-model.number="pixels.count">
+                </label>
+                <label class="field-label" for="pixel-duration">
+                  Duration ms
+                  <input id="pixel-duration" type="number" min="0" max="65535" x-model.number="pixels.duration_ms">
+                </label>
+              </div>
+              <p class="tile-subtitle">Use count 0 to target from the start pixel through the end of each rail.</p>
+            </section>
+
+            <section class="audio-card">
+              <span class="tile-title">Color Fade</span>
+              <div class="color-grid">
+                <label class="field-label" for="pixel-start-color">
+                  From
+                  <input id="pixel-start-color" type="color" x-model="pixels.start_color">
+                </label>
+                <label class="field-label" for="pixel-end-color">
+                  To
+                  <input id="pixel-end-color" type="color" x-model="pixels.end_color">
+                </label>
+              </div>
+              <div class="pixel-preview" :style="`background: linear-gradient(90deg, ${pixels.start_color}, ${pixels.end_color})`"></div>
+              <div class="actions">
+                <button class="secondary" @click="sendPixelFade()">Send Fade</button>
+                <button class="secondary" @click="blackoutPixels()">Blackout</button>
+              </div>
+              <template x-if="pixels.message">
+                <p class="tile-subtitle panel-note" x-text="pixels.message"></p>
+              </template>
+            </section>
           </div>
         </section>
 
@@ -397,6 +445,15 @@
           pollHandle: null,
           servoDrafts: {},
           activeTab: "power",
+          pixels: {
+            rails: ["1", "2", "3", "4"],
+            start: 0,
+            count: 0,
+            start_color: "#000000",
+            end_color: "#0000ff",
+            duration_ms: 1000,
+            message: "",
+          },
           uploadFile: null,
           uploading: false,
 
@@ -502,6 +559,38 @@
             if (this.socketConnected && this.socket) {
               this.socket.emit("gpio:override_clear_all");
             }
+          },
+
+          togglePixelRail(rail) {
+            if (this.pixels.rails.includes(rail)) {
+              this.pixels.rails = this.pixels.rails.filter((item) => item !== rail);
+              return;
+            }
+            this.pixels.rails = [...this.pixels.rails, rail];
+          },
+
+          sendPixelFade() {
+            if (!this.socketConnected || !this.socket) {
+              this.pixels.message = "Socket is not connected";
+              return;
+            }
+            this.socket.emit("pixels:animate", {
+              rails: this.pixels.rails,
+              start: this.pixels.start,
+              count: this.pixels.count,
+              start_rgb: this.hexToRgb(this.pixels.start_color),
+              end_rgb: this.hexToRgb(this.pixels.end_color),
+              duration_ms: this.pixels.duration_ms,
+              animation_id: 0,
+            });
+            this.pixels.message = "Fade command sent";
+          },
+
+          blackoutPixels() {
+            this.pixels.start_color = "#000000";
+            this.pixels.end_color = "#000000";
+            this.pixels.duration_ms = 250;
+            this.sendPixelFade();
           },
 
           async loadAudioLibrary() {
@@ -657,6 +746,15 @@
               return "--";
             }
             return `${value} mA`;
+          },
+
+          hexToRgb(value) {
+            const hex = value.replace("#", "");
+            return [
+              parseInt(hex.slice(0, 2), 16),
+              parseInt(hex.slice(2, 4), 16),
+              parseInt(hex.slice(4, 6), 16),
+            ];
           },
 
           formatBytes(value) {

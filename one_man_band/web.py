@@ -207,6 +207,30 @@ def handle_servo_set_value(payload: dict[str, object]):
         emit("server:error", {"message": str(exc)})
 
 
+@socketio.on("pixels:animate")
+def handle_pixels_animate(payload: dict[str, object]):
+    try:
+        rails = payload.get("rails", [])
+        if not isinstance(rails, list):
+            raise ValueError("Pixel rails must be a list")
+        rail_mask = 0
+        for rail in rails:
+            rail_mask |= 1 << (int(rail) - 1)
+
+        state = controller.animate_pixels(
+            rail_mask=rail_mask,
+            start=int(payload["start"]),
+            count=int(payload["count"]),
+            start_rgb=tuple(int(value) for value in payload["start_rgb"]),
+            end_rgb=tuple(int(value) for value in payload["end_rgb"]),
+            duration_ms=int(payload["duration_ms"]),
+            animation_id=int(payload.get("animation_id", 0)),
+        )
+        emit("state:update", {**state.to_payload(), "audio_status": audio_manager.status().to_payload()}, broadcast=True)
+    except (KeyError, TypeError, ValueError) as exc:
+        emit("server:error", {"message": str(exc)})
+
+
 @socketio.on("audio:play")
 def handle_audio_play(payload: dict[str, str]):
     try:

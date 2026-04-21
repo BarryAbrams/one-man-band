@@ -272,6 +272,58 @@ button:hover {
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
 }
 
+.pixel-layout {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.rail-picker,
+.pixel-fields,
+.color-grid {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.rail-picker {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.pixel-fields,
+.color-grid {
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+}
+
+.field-label {
+  display: grid;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.field-label input {
+  width: 100%;
+  border: 1px solid rgba(78, 60, 33, 0.16);
+  border-radius: 14px;
+  background: #fffaf1;
+  color: var(--text);
+  font: inherit;
+  padding: 10px 12px;
+}
+
+.field-label input[type="color"] {
+  height: 48px;
+  padding: 4px;
+}
+
+.pixel-preview {
+  height: 64px;
+  margin: 18px 0;
+  border-radius: 18px;
+  border: 1px solid rgba(78, 60, 33, 0.12);
+}
+
 .input-tile {
   min-height: 180px;
 }
