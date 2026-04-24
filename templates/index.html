@@ -439,11 +439,21 @@
                       Label
                       <input type="text" x-model="selectedAnimationTrack().label" @input="scheduleAnimationSave()">
                     </label>
-                    <label class="field-label">
-                      Start ms
-                      <input type="number" min="0" x-model.number="animations.playhead_ms">
-                    </label>
-                    <button class="secondary" @click="addAnimationKeyframe()">Add Keyframe At Playhead</button>
+                    <template x-if="selectedAnimationTrack().type === 'audio'">
+                      <label class="field-label">
+                        Start ms
+                        <input type="number" min="0" :max="animations.form.duration_ms" x-model.number="selectedAnimationTrack().keyframes[0].time_ms" @input="scheduleAnimationSave()">
+                      </label>
+                    </template>
+                    <template x-if="selectedAnimationTrack().type !== 'audio'">
+                      <label class="field-label">
+                        Start ms
+                        <input type="number" min="0" x-model.number="animations.playhead_ms">
+                      </label>
+                    </template>
+                    <template x-if="selectedAnimationTrack().type !== 'audio'">
+                      <button class="secondary" @click="addAnimationKeyframe()">Add Keyframe At Playhead</button>
+                    </template>
                   </div>
 
                   <template x-if="selectedAnimationTrack().type === 'solenoid'">
@@ -530,7 +540,7 @@
                     </div>
                   </template>
 
-                  <div class="keyframe-list">
+                  <div class="keyframe-list" x-show="selectedAnimationTrack().type !== 'audio'">
                     <template x-if="!selectedAnimationTrack().keyframes.length">
                       <p class="tile-subtitle">No keyframes on this track yet.</p>
                     </template>
@@ -1443,7 +1453,7 @@
                 ...base,
                 label: "Audio",
                 target: { filename: "", speaker: "both" },
-                keyframes: [{ time_ms: 0 }],
+                keyframes: [{ time_ms: 0, value: "start" }],
               };
             }
             return {
@@ -1465,11 +1475,12 @@
             };
             normalized.timeline.tracks = (normalized.timeline.tracks || []).map((track) => {
               const defaults = this.defaultAnimationTrack(track.type || "solenoid");
+              const keyframes = Array.isArray(track.keyframes) ? track.keyframes : defaults.keyframes;
               return {
                 ...defaults,
                 ...track,
                 target: { ...defaults.target, ...(track.target || {}) },
-                keyframes: Array.isArray(track.keyframes) ? track.keyframes : defaults.keyframes,
+                keyframes: track.type === "audio" ? [{ time_ms: Number(keyframes[0]?.time_ms || 0), value: "start" }] : keyframes,
               };
             });
             return normalized;
@@ -1551,6 +1562,8 @@
                   ...track,
                   keyframes: [...(track.keyframes || [])]
                     .map((keyframe) => track.type === "solenoid" ? { ...keyframe, value: this.logicBool(keyframe.value) } : keyframe)
+                    .filter((_, index) => track.type !== "audio" || index === 0)
+                    .map((keyframe) => track.type === "audio" ? { time_ms: Number(keyframe.time_ms || 0), value: "start" } : keyframe)
                     .sort((a, b) => Number(a.time_ms || 0) - Number(b.time_ms || 0)),
                 })),
               },
@@ -1600,6 +1613,11 @@
               return;
             }
             const time = Math.max(0, Math.min(Number(this.animations.playhead_ms) || 0, Number(this.animations.form.duration_ms) || 0));
+            if (track.type === "audio") {
+              track.keyframes = [{ time_ms: time, value: "start" }];
+              this.scheduleAnimationSave();
+              return;
+            }
             let keyframe = { time_ms: time };
             if (track.type === "servo") {
               keyframe = { ...keyframe, value: 127, easing: "ease" };
@@ -1712,7 +1730,7 @@
               const className = this.logicBool(first.value) ? "relay-line-high" : "relay-line-low";
               segments.unshift(`<path class="timeline-state-line ${className}" d="M 0 50 L ${firstX} 50"></path>`);
             }
-            return `${segments.join("")}<text class="timeline-axis-label" x="1" y="22">RED HIGH</text><text class="timeline-axis-label" x="1" y="88">BLACK LOW</text>`;
+            return segments.join("");
           },
 
           servoTimelineVisual(track) {
@@ -1738,7 +1756,7 @@
                 path += ` C ${cp1x} ${previous.y}, ${cp2x} ${point.y}, ${point.x} ${point.y}`;
               }
             }
-            return `<path class="timeline-state-line servo-line" d="${path}"></path><text class="timeline-axis-label" x="1" y="16">255</text><text class="timeline-axis-label" x="1" y="92">0</text>`;
+            return `<path class="timeline-state-line servo-line" d="${path}"></path>`;
           },
 
           pixelTimelineVisual(track) {

@@ -517,6 +517,7 @@ button:hover {
 
 .animation-panel {
   min-height: calc(100vh - 220px);
+  padding-bottom: 360px;
 }
 
 .animation-layout {
@@ -570,11 +571,20 @@ button:hover {
 }
 
 .timeline-shell {
-  position: sticky;
-  bottom: 16px;
-  z-index: 5;
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
   display: grid;
   gap: 12px;
+  width: 100vw;
+  max-height: 42vh;
+  padding: 16px max(16px, calc((100vw - 1120px) / 2));
+  border-right: 0;
+  border-bottom: 0;
+  border-left: 0;
+  border-radius: 18px 18px 0 0;
   box-shadow: 0 10px 34px rgba(60, 40, 10, 0.12);
 }
 
@@ -600,7 +610,7 @@ button:hover {
 .timeline-track-list {
   display: grid;
   gap: 8px;
-  max-height: 300px;
+  max-height: min(280px, 28vh);
   overflow: auto;
 }
 
@@ -694,15 +704,6 @@ button:hover {
 .waveform-bar {
   fill: #5d6fb7;
   opacity: 0.76;
-}
-
-.timeline-axis-label {
-  fill: rgba(31, 26, 20, 0.56);
-  font-size: 8px;
-  font-weight: 800;
-  paint-order: stroke;
-  stroke: rgba(255, 250, 241, 0.72);
-  stroke-width: 2px;
 }
 
 .timeline-key {
@@ -1021,10 +1022,10 @@ button:hover {
   }
 
   .timeline-ruler {
-    margin-left: 0;
+    margin-left: 120px;
   }
 
   .timeline-track {
-    grid-template-columns: 1fr;
+    grid-template-columns: 110px minmax(220px, 1fr);
   }
 }
