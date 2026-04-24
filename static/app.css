@@ -312,6 +312,16 @@ button:hover {
   padding: 10px 12px;
 }
 
+.field-label select {
+  width: 100%;
+  border: 1px solid rgba(78, 60, 33, 0.16);
+  border-radius: 14px;
+  background: #fffaf1;
+  color: var(--text);
+  font: inherit;
+  padding: 10px 12px;
+}
+
 .field-label input[type="color"] {
   height: 48px;
   padding: 4px;
@@ -391,6 +401,93 @@ button:hover {
 .logic-card {
   min-height: 220px;
   align-content: center;
+}
+
+.logic-layout {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(260px, 0.8fr) minmax(0, 1.6fr);
+}
+
+.logic-list,
+.logic-editor,
+.logic-block,
+.logic-action {
+  display: grid;
+  gap: 14px;
+}
+
+.logic-list,
+.logic-editor {
+  align-content: start;
+}
+
+.logic-row {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  align-items: end;
+}
+
+.logic-block,
+.logic-action,
+.logic-rule-row {
+  padding: 16px;
+  background: #f8f3ea;
+  border: 1px solid rgba(78, 60, 33, 0.08);
+  border-radius: 18px;
+}
+
+.logic-rule-row {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  text-align: left;
+}
+
+.logic-rule-row.active {
+  background: linear-gradient(180deg, #eff9f4, #d9eee8);
+  box-shadow: inset 0 0 0 1px rgba(31, 107, 90, 0.12);
+}
+
+.logic-kicker {
+  color: var(--accent);
+  font-size: 0.84rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.compact-header {
+  margin-bottom: 0;
+}
+
+.check-label {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  min-height: 44px;
+  color: var(--muted);
+}
+
+.check-label input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
+.logic-rails {
+  margin: 0 0 12px;
+}
+
+.logic-actions {
+  margin-top: 2px;
+}
+
+.danger {
+  color: var(--error);
 }
 
 .servo-card.active {
@@ -546,5 +643,9 @@ button:hover {
   .tab-button {
     width: 100%;
     justify-content: center;
+  }
+
+  .logic-layout {
+    grid-template-columns: 1fr;
   }
 }

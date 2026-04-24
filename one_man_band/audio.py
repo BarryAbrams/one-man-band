@@ -25,6 +25,7 @@ class AudioStatus:
     paused: bool = False
     current_track: str | None = None
     volume: float = 1.0
+    output: str = "both"
     error: str = ""
 
     def to_payload(self) -> dict[str, object]:
@@ -37,6 +38,7 @@ class AudioManager:
         self._audio_dir = base_dir / "uploads" / "audio"
         self._audio_dir.mkdir(parents=True, exist_ok=True)
         self._status = AudioStatus(available=pygame is not None)
+        self._channel = None
 
     @property
     def audio_dir(self) -> Path:
@@ -72,13 +74,14 @@ class AudioManager:
     def _refresh_status_locked(self) -> None:
         if not self._status.initialized or pygame is None:
             return
-        busy = pygame.mixer.music.get_busy()
+        busy = self._channel.get_busy() if self._channel is not None else pygame.mixer.music.get_busy()
         if self._status.paused:
             self._status.playing = False
             return
         if not busy:
             self._status.playing = False
             self._status.current_track = None
+            self._channel = None
 
     def status(self) -> AudioStatus:
         with self._lock:
@@ -110,7 +113,7 @@ class AudioManager:
         storage.save(target)
         return filename
 
-    def play(self, filename: str) -> AudioStatus:
+    def play(self, filename: str, speaker: str = "both") -> AudioStatus:
         with self._lock:
             if not self._ensure_mixer():
                 return AudioStatus(**asdict(self._status))
@@ -119,12 +122,33 @@ class AudioManager:
             if not path.is_file():
                 raise ValueError(f"Audio file not found: {filename}")
 
+            output = speaker if speaker in {"left", "right", "both"} else "both"
             try:
-                pygame.mixer.music.load(str(path))
-                pygame.mixer.music.play()
+                pygame.mixer.music.stop()
+                if self._channel is not None:
+                    self._channel.stop()
+                    self._channel = None
+
+                if output == "both":
+                    pygame.mixer.music.load(str(path))
+                    pygame.mixer.music.set_volume(self._status.volume)
+                    pygame.mixer.music.play()
+                else:
+                    sound = pygame.mixer.Sound(str(path))
+                    channel = pygame.mixer.find_channel(True)
+                    if channel is None:
+                        raise RuntimeError("No pygame audio channel is available")
+                    if output == "right":
+                        channel.set_volume(0.0, self._status.volume)
+                    else:
+                        channel.set_volume(self._status.volume, 0.0)
+                    channel.play(sound)
+                    self._channel = channel
+
                 self._status.playing = True
                 self._status.paused = False
                 self._status.current_track = path.name
+                self._status.output = output
                 self._status.error = ""
             except Exception as exc:  # pragma: no cover - depends on target hardware
                 self._status.error = str(exc)
@@ -136,6 +160,9 @@ class AudioManager:
         with self._lock:
             if self._status.initialized and pygame is not None:
                 pygame.mixer.music.stop()
+                if self._channel is not None:
+                    self._channel.stop()
+                    self._channel = None
             self._status.playing = False
             self._status.paused = False
             self._status.current_track = None
@@ -144,7 +171,10 @@ class AudioManager:
     def pause(self) -> AudioStatus:
         with self._lock:
             if self._status.initialized and pygame is not None:
-                pygame.mixer.music.pause()
+                if self._channel is not None:
+                    self._channel.pause()
+                else:
+                    pygame.mixer.music.pause()
                 self._status.paused = True
                 self._status.playing = False
             return AudioStatus(**asdict(self._status))
@@ -152,7 +182,10 @@ class AudioManager:
     def resume(self) -> AudioStatus:
         with self._lock:
             if self._status.initialized and pygame is not None:
-                pygame.mixer.music.unpause()
+                if self._channel is not None:
+                    self._channel.unpause()
+                else:
+                    pygame.mixer.music.unpause()
                 self._status.paused = False
                 self._status.playing = True
             return AudioStatus(**asdict(self._status))
@@ -162,5 +195,13 @@ class AudioManager:
             clamped = max(0.0, min(1.0, value))
             self._status.volume = clamped
             if self._status.initialized and pygame is not None:
-                pygame.mixer.music.set_volume(clamped)
+                if self._channel is not None:
+                    if self._status.output == "right":
+                        self._channel.set_volume(0.0, clamped)
+                    elif self._status.output == "left":
+                        self._channel.set_volume(clamped, 0.0)
+                    else:
+                        self._channel.set_volume(clamped)
+                else:
+                    pygame.mixer.music.set_volume(clamped)
             return AudioStatus(**asdict(self._status))

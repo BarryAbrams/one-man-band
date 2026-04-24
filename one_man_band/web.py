@@ -9,24 +9,32 @@ from flask_socketio import SocketIO, emit
 
 from .audio import AudioManager
 from .device import DeviceController
+from .logic import LogicEngine, LogicStore
 
 
 socketio = SocketIO(async_mode="threading", cors_allowed_origins="*")
 controller = DeviceController()
-audio_manager = AudioManager(Path(__file__).resolve().parent.parent)
+base_dir = Path(__file__).resolve().parent.parent
+audio_manager = AudioManager(base_dir)
+logic_store = LogicStore(base_dir / "data" / "logic.sqlite3")
+logic_engine = LogicEngine(logic_store, controller, audio_manager, on_action=lambda: _broadcast_state())
 _poller_started = False
 
 
 def _metadata() -> dict[str, object]:
     return {
         **controller.metadata(),
+        **logic_engine.metadata(),
         "audio_extensions": [".wav", ".mp3", ".ogg"],
     }
 
 
-def _combined_state() -> dict[str, object]:
+def _combined_state(process_logic: bool = False) -> dict[str, object]:
+    device_state = controller.read_state().to_payload()
+    if process_logic:
+        logic_engine.process_state(device_state)
     return {
-        **controller.read_state().to_payload(),
+        **device_state,
         "audio_status": audio_manager.status().to_payload(),
     }
 
@@ -68,6 +76,33 @@ def create_app() -> Flask:
             }
         )
 
+    @app.get("/api/logic")
+    def logic_rules():
+        return jsonify(logic_engine.rules_payload())
+
+    @app.post("/api/logic")
+    def logic_create_rule():
+        try:
+            rule = logic_engine.save_rule(request.get_json(force=True) or {})
+        except (TypeError, ValueError) as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        return jsonify({"ok": True, "rule": rule.to_payload()})
+
+    @app.put("/api/logic/<int:rule_id>")
+    def logic_update_rule(rule_id: int):
+        payload = request.get_json(force=True) or {}
+        payload["id"] = rule_id
+        try:
+            rule = logic_engine.save_rule(payload)
+        except (TypeError, ValueError) as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        return jsonify({"ok": True, "rule": rule.to_payload()})
+
+    @app.delete("/api/logic/<int:rule_id>")
+    def logic_delete_rule(rule_id: int):
+        logic_engine.delete_rule(rule_id)
+        return jsonify({"ok": True})
+
     @app.post("/api/audio/upload")
     def audio_upload():
         file = request.files.get("file")
@@ -100,7 +135,7 @@ def _broadcast_state() -> None:
 def _poll_state_forever() -> None:
     while True:
         socketio.sleep(0.5)
-        _broadcast_state()
+        socketio.emit("state:update", _combined_state(process_logic=True))
 
 
 def create_socketio(app: Flask) -> SocketIO:
@@ -108,6 +143,7 @@ def create_socketio(app: Flask) -> SocketIO:
     socketio.init_app(app)
 
     if not _poller_started:
+        logic_engine.run_boot_rules()
         socketio.start_background_task(_poll_state_forever)
         _poller_started = True
 
@@ -234,7 +270,7 @@ def handle_pixels_animate(payload: dict[str, object]):
 @socketio.on("audio:play")
 def handle_audio_play(payload: dict[str, str]):
     try:
-        status = audio_manager.play(payload["filename"])
+        status = audio_manager.play(payload["filename"], payload.get("speaker", "both"))
         emit("audio:update", {"status": status.to_payload(), "tracks": audio_manager.list_tracks()}, broadcast=True)
     except (KeyError, ValueError) as exc:
         emit("server:error", {"message": str(exc)})

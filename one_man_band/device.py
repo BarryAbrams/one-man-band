@@ -157,6 +157,7 @@ class DeviceController:
         self._gpio_mode = os.environ.get("OMB_GPIO_PULL", "off").strip().lower()
         self._gpio_ready = False
         self._gpio_error = ""
+        self._servo_value_cache: dict[int, int] = {}
         self._state = DeviceState(
             version=1 if self._mock_mode else 0,
             ina_presence=0b11 if self._mock_mode else 0,
@@ -300,6 +301,7 @@ class DeviceController:
             self._state = self._read_from_bus()
             self._state.gpio_input_overrides = overrides
             self._state.pixel_command = pixel_command
+            self._apply_servo_value_cache()
             return DeviceState(**asdict(self._state))
 
     def _update_register(self, reg: int, value: int) -> DeviceState:
@@ -317,6 +319,7 @@ class DeviceController:
                     if self._state.servo_values is None:
                         self._state.servo_values = [127 for _ in SERVO_CHANNELS]
                     self._state.servo_values[reg - REG_SERVO_BASE] = value & 0xFF
+                    self._servo_value_cache[reg - REG_SERVO_BASE] = value & 0xFF
                 self._state.connected = True
                 self._state.error = ""
                 self._state.gpio_inputs, self._state.gpio_error = self._read_gpio_inputs()
@@ -343,6 +346,9 @@ class DeviceController:
                 self._state = self._read_from_bus()
                 self._state.gpio_input_overrides = overrides
                 self._state.pixel_command = pixel_command
+                if REG_SERVO_BASE <= reg < REG_SERVO_BASE + len(SERVO_CHANNELS):
+                    self._servo_value_cache[reg - REG_SERVO_BASE] = value & 0xFF
+                self._apply_servo_value_cache()
             except OSError as exc:
                 gpio_inputs, gpio_error = self._read_gpio_inputs()
                 self._state = DeviceState(
@@ -372,6 +378,14 @@ class DeviceController:
         mask = SOLENOIDS[name]
         state = self.read_state()
         return self._update_register(REG_SOLENOIDS, state.solenoids ^ mask)
+
+    def set_solenoid(self, name: str, enabled: bool) -> DeviceState:
+        if name not in SOLENOIDS:
+            raise ValueError(f"Unknown solenoid: {name}")
+        mask = SOLENOIDS[name]
+        state = self.read_state()
+        value = (state.solenoids | mask) if enabled else (state.solenoids & ~mask)
+        return self._update_register(REG_SOLENOIDS, value)
 
     def clear_solenoids(self) -> DeviceState:
         return self._update_register(REG_SOLENOIDS, 0x00)
@@ -432,6 +446,15 @@ class DeviceController:
         if not 0 <= value <= 255:
             raise ValueError(f"Servo value must be between 0 and 255: {value}")
         return self._update_register(REG_SERVO_BASE + channel, value)
+
+    def _apply_servo_value_cache(self) -> None:
+        if not self._servo_value_cache:
+            return
+        if self._state.servo_values is None:
+            self._state.servo_values = [0 for _ in SERVO_CHANNELS]
+        for channel, value in self._servo_value_cache.items():
+            if channel in SERVO_CHANNELS:
+                self._state.servo_values[channel] = value & 0xFF
 
     def animate_pixels(
         self,

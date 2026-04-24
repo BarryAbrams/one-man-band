@@ -208,8 +208,8 @@
                   max="255"
                   :id="`servo-${channel}`"
                   :value="servoDrafts[String(channel)] ?? state.servo_values_map[String(channel)] ?? 0"
-                  @input="servoDrafts[String(channel)] = Number($event.target.value)"
-                  @change="setServoValue(channel, servoDrafts[String(channel)] ?? Number($event.target.value))"
+                  @input="beginServoEdit(channel, Number($event.target.value))"
+                  @change="commitServoValue(channel, servoDrafts[String(channel)] ?? Number($event.target.value))"
                 >
                 <div class="servo-scale">
                   <span>0</span>
@@ -370,12 +370,264 @@
         <section class="panel">
           <div class="section-header">
             <p class="eyebrow">Logic</p>
-            <h2>Future Automation</h2>
-            <p class="section-copy">Reserved for scenes, rules, sequencing, and higher-level OMB control logic.</p>
+            <h2>Automation Rules</h2>
+            <p class="section-copy">Build simple if / then blocks for boot events, GPIO changes, timers, and current limits.</p>
           </div>
-          <div class="placeholder-card logic-card">
-            <span class="tile-title">Future Stuff</span>
-            <span class="tile-subtitle">This area is ready for presets, timed actions, sensor logic, or song-driven automation later on.</span>
+          <div class="logic-layout">
+            <section class="logic-list">
+              <div class="panel-header compact-header">
+                <span class="tile-title">Rules</span>
+                <button class="secondary" @click="newLogicRule()">New Rule</button>
+              </div>
+              <template x-if="!logic.rules.length">
+                <p class="tile-subtitle">No rules saved yet.</p>
+              </template>
+              <template x-for="rule in logic.rules" :key="rule.id">
+                <button
+                  class="logic-rule-row"
+                  :class="logic.selectedId === rule.id ? 'active' : ''"
+                  @click="editLogicRule(rule)"
+                >
+                  <span>
+                    <span class="tile-title" x-text="rule.name"></span>
+                    <span class="tile-subtitle" x-text="logicRuleSummary(rule)"></span>
+                  </span>
+                  <span class="badge" :class="rule.enabled ? 'ok' : 'error'" x-text="rule.enabled ? 'On' : 'Off'"></span>
+                </button>
+              </template>
+            </section>
+
+            <section class="logic-editor">
+              <div class="logic-row">
+                <label class="field-label" for="logic-name">
+                  Name
+                  <input id="logic-name" type="text" x-model="logic.form.name">
+                </label>
+                <label class="check-label">
+                  <input type="checkbox" x-model="logic.form.enabled">
+                  Enabled
+                </label>
+              </div>
+
+              <div class="logic-block">
+                <span class="logic-kicker">If</span>
+                <div class="logic-row">
+                  <label class="field-label" for="logic-cause-type">
+                    Cause
+                    <select id="logic-cause-type" x-model="logic.form.cause.type" @change="logicCauseChanged()">
+                      <option value="boot">Script boots</option>
+                      <option value="gpio">GPIO changes</option>
+                      <option value="timer">Timer ends</option>
+                      <option value="current_above">Too many amps are drawn</option>
+                    </select>
+                  </label>
+                  <template x-if="logic.form.cause.type === 'gpio'">
+                    <label class="field-label">
+                      Input
+                      <select x-model="logic.form.cause.input">
+                        <template x-for="name in meta.gpio_inputs || []" :key="name">
+                          <option :value="name" x-text="`Input ${name}`"></option>
+                        </template>
+                      </select>
+                    </label>
+                  </template>
+                  <template x-if="logic.form.cause.type === 'gpio'">
+                    <label class="field-label">
+                      State
+                      <select x-model="logic.form.cause.state">
+                        <option :value="true">HIGH</option>
+                        <option :value="false">LOW</option>
+                      </select>
+                    </label>
+                  </template>
+                  <template x-if="logic.form.cause.type === 'timer'">
+                    <label class="field-label">
+                      Seconds
+                      <input type="number" min="0" step="0.1" x-model.number="logic.form.cause.seconds">
+                    </label>
+                  </template>
+                  <template x-if="logic.form.cause.type === 'timer'">
+                    <label class="check-label">
+                      <input type="checkbox" x-model="logic.form.cause.repeats">
+                      Repeats
+                    </label>
+                  </template>
+                  <template x-if="logic.form.cause.type === 'current_above'">
+                    <label class="field-label">
+                      Channel
+                      <select x-model="logic.form.cause.channel">
+                        <template x-for="channel in Object.keys(meta.ina_channels || {})" :key="channel">
+                          <option :value="channel" x-text="channel"></option>
+                        </template>
+                      </select>
+                    </label>
+                  </template>
+                  <template x-if="logic.form.cause.type === 'current_above'">
+                    <label class="field-label">
+                      Threshold mA
+                      <input type="number" min="0" x-model.number="logic.form.cause.threshold_ma">
+                    </label>
+                  </template>
+                </div>
+                <template x-if="logic.form.cause.type === 'gpio' || logic.form.cause.type === 'current_above'">
+                  <div class="logic-row">
+                    <template x-if="logic.form.cause.type === 'gpio'">
+                      <label class="field-label">
+                        Debounce ms
+                        <input type="number" min="0" x-model.number="logic.form.cause.debounce_ms">
+                      </label>
+                    </template>
+                    <label class="field-label">
+                      Cooldown ms
+                      <input type="number" min="0" x-model.number="logic.form.cause.cooldown_ms">
+                    </label>
+                  </div>
+                </template>
+              </div>
+
+              <div class="logic-block">
+                <div class="panel-header compact-header">
+                  <span class="logic-kicker">Then</span>
+                  <button class="secondary" @click="addLogicAction()">Add Action</button>
+                </div>
+                <template x-for="(action, index) in logic.form.actions" :key="index">
+                  <section class="logic-action">
+                    <div class="logic-row">
+                      <label class="field-label">
+                        Action
+                        <select x-model="action.type" @change="logicActionChanged(action)">
+                          <option value="audio_play">Play audio</option>
+                          <option value="solenoid_pulse">Pulse relay</option>
+                          <option value="solenoid_set">Set relay</option>
+                          <option value="servo_set">Move servo</option>
+                          <option value="pixels_animate">Set neopixels</option>
+                        </select>
+                      </label>
+                      <button class="secondary" @click="removeLogicAction(index)" :disabled="logic.form.actions.length === 1">Remove</button>
+                    </div>
+
+                    <template x-if="action.type === 'audio_play'">
+                      <div class="logic-row">
+                        <label class="field-label">
+                          File
+                          <select x-model="action.filename">
+                            <option value="">Choose a track</option>
+                            <template x-for="track in audio.tracks" :key="track.name">
+                              <option :value="track.name" x-text="track.name"></option>
+                            </template>
+                          </select>
+                        </label>
+                        <label class="field-label">
+                          Speaker
+                          <select x-model="action.speaker">
+                            <option value="both">Both</option>
+                            <option value="right">Right</option>
+                            <option value="left">Left</option>
+                          </select>
+                        </label>
+                      </div>
+                    </template>
+
+                    <template x-if="action.type === 'solenoid_pulse' || action.type === 'solenoid_set'">
+                      <div class="logic-row">
+                        <label class="field-label">
+                          Relay
+                          <select x-model="action.name">
+                            <template x-for="name in meta.solenoids || []" :key="name">
+                              <option :value="name" x-text="relayLabels[name] || name"></option>
+                            </template>
+                          </select>
+                        </label>
+                        <template x-if="action.type === 'solenoid_pulse'">
+                          <label class="field-label">
+                            Duration ms
+                            <input type="number" min="0" x-model.number="action.duration_ms">
+                          </label>
+                        </template>
+                        <template x-if="action.type === 'solenoid_set'">
+                          <label class="field-label">
+                            State
+                            <select x-model="action.enabled">
+                              <option :value="true">HIGH</option>
+                              <option :value="false">LOW</option>
+                            </select>
+                          </label>
+                        </template>
+                      </div>
+                    </template>
+
+                    <template x-if="action.type === 'servo_set'">
+                      <div class="logic-row">
+                        <label class="field-label">
+                          Servo
+                          <select x-model.number="action.channel">
+                            <template x-for="channel in meta.servos || []" :key="channel">
+                              <option :value="channel" x-text="`Servo ${channel}`"></option>
+                            </template>
+                          </select>
+                        </label>
+                        <label class="field-label">
+                          Value
+                          <input type="number" min="0" max="255" x-model.number="action.value">
+                        </label>
+                        <label class="check-label">
+                          <input type="checkbox" x-model="action.enable">
+                          Enable
+                        </label>
+                      </div>
+                    </template>
+
+                    <template x-if="action.type === 'pixels_animate'">
+                      <div>
+                        <div class="rail-picker logic-rails">
+                          <template x-for="rail in meta.pixel_rails || []" :key="rail">
+                            <button
+                              class="pill-button"
+                              :class="action.rails.includes(rail) ? 'active' : ''"
+                              @click="toggleActionPixelRail(action, rail)"
+                              x-text="`PIX ${rail}`"
+                            ></button>
+                          </template>
+                        </div>
+                        <div class="logic-row">
+                          <label class="field-label">
+                            Start
+                            <input type="number" min="0" max="99" x-model.number="action.start">
+                          </label>
+                          <label class="field-label">
+                            Count
+                            <input type="number" min="0" max="100" x-model.number="action.count">
+                          </label>
+                          <label class="field-label">
+                            Duration ms
+                            <input type="number" min="0" max="65535" x-model.number="action.duration_ms">
+                          </label>
+                        </div>
+                        <div class="logic-row">
+                          <label class="field-label">
+                            From
+                            <input type="color" x-model="action.start_color">
+                          </label>
+                          <label class="field-label">
+                            To
+                            <input type="color" x-model="action.end_color">
+                          </label>
+                        </div>
+                      </div>
+                    </template>
+                  </section>
+                </template>
+              </div>
+
+              <div class="actions logic-actions">
+                <button class="secondary" @click="saveLogicRule()">Save Rule</button>
+                <button class="secondary" @click="newLogicRule()">Clear Form</button>
+                <button class="secondary danger" @click="deleteLogicRule()" :disabled="!logic.form.id">Delete</button>
+              </div>
+              <template x-if="logic.message">
+                <p class="tile-subtitle panel-note" x-text="logic.message"></p>
+              </template>
+            </section>
           </div>
         </section>
       </section>
@@ -437,6 +689,7 @@
               paused: false,
               current_track: null,
               volume: 1,
+              output: "both",
               error: "",
             },
           },
@@ -444,6 +697,7 @@
           socketConnected: false,
           pollHandle: null,
           servoDrafts: {},
+          servoEditing: {},
           activeTab: "power",
           pixels: {
             rails: ["1", "2", "3", "4"],
@@ -454,12 +708,26 @@
             duration_ms: 1000,
             message: "",
           },
+          logic: {
+            rules: [],
+            selectedId: null,
+            message: "",
+            form: {
+              id: null,
+              name: "New rule",
+              enabled: true,
+              cause: { type: "gpio", input: "1", state: true, debounce_ms: 50, cooldown_ms: 1000 },
+              actions: [{ type: "solenoid_pulse", name: "P0", duration_ms: 1000 }],
+            },
+          },
           uploadFile: null,
           uploading: false,
 
           init() {
+            this.newLogicRule();
             this.loadState();
             this.loadAudioLibrary();
+            this.loadLogicRules();
             this.startPolling();
 
             if (typeof io === "undefined") {
@@ -504,12 +772,241 @@
             });
           },
 
+          defaultCause(type = "gpio") {
+            const firstInput = (this.meta.gpio_inputs || ["1"])[0];
+            const firstIna = Object.keys(this.meta.ina_channels || { "12V_C": {} })[0] || "12V_C";
+            if (type === "boot") {
+              return { type: "boot" };
+            }
+            if (type === "timer") {
+              return { type: "timer", seconds: 5, repeats: false };
+            }
+            if (type === "current_above") {
+              return { type: "current_above", channel: firstIna, threshold_ma: 1000, cooldown_ms: 5000 };
+            }
+            return { type: "gpio", input: firstInput, state: true, debounce_ms: 50, cooldown_ms: 1000 };
+          },
+
+          defaultAction(type = "solenoid_pulse") {
+            const firstSolenoid = (this.meta.solenoids || ["P0"])[0];
+            const firstServo = (this.meta.servos || [0])[0];
+            if (type === "audio_play") {
+              return { type, filename: "", speaker: "both" };
+            }
+            if (type === "solenoid_set") {
+              return { type, name: firstSolenoid, enabled: true };
+            }
+            if (type === "servo_set") {
+              return { type, channel: firstServo, value: 127, enable: true };
+            }
+            if (type === "pixels_animate") {
+              return {
+                type,
+                rails: ["1"],
+                start: 0,
+                count: 0,
+                start_color: "#000000",
+                end_color: "#0000ff",
+                duration_ms: 1000,
+              };
+            }
+            return { type: "solenoid_pulse", name: firstSolenoid, duration_ms: 1000 };
+          },
+
+          newLogicRule() {
+            this.logic.selectedId = null;
+            this.logic.message = "";
+            this.logic.form = {
+              id: null,
+              name: "New rule",
+              enabled: true,
+              cause: this.defaultCause("gpio"),
+              actions: [this.defaultAction("solenoid_pulse")],
+            };
+          },
+
+          async loadLogicRules() {
+            try {
+              const response = await fetch("/api/logic");
+              if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+              }
+              const payload = await response.json();
+              this.logic.rules = payload.rules || [];
+            } catch (error) {
+              this.logic.message = `Unable to load rules: ${error.message}`;
+            }
+          },
+
+          editLogicRule(rule) {
+            this.logic.selectedId = rule.id;
+            this.logic.message = "";
+            this.logic.form = {
+              id: rule.id,
+              name: rule.name,
+              enabled: rule.enabled,
+              cause: { ...this.defaultCause(rule.cause?.type || "gpio"), ...(rule.cause || {}) },
+              actions: (rule.actions || []).map((action) => this.normalizeLogicAction(action)),
+            };
+            if (!this.logic.form.actions.length) {
+              this.logic.form.actions = [this.defaultAction("solenoid_pulse")];
+            }
+          },
+
+          normalizeLogicAction(action) {
+            const normalized = { ...this.defaultAction(action.type || "solenoid_pulse"), ...action };
+            if (normalized.type === "pixels_animate") {
+              normalized.rails = normalized.rails || ["1"];
+              normalized.start_color = normalized.start_color || this.rgbToHex(normalized.start_rgb || [0, 0, 0]);
+              normalized.end_color = normalized.end_color || this.rgbToHex(normalized.end_rgb || [0, 0, 255]);
+            }
+            return normalized;
+          },
+
+          logicCauseChanged() {
+            const type = this.logic.form.cause.type;
+            this.logic.form.cause = this.defaultCause(type);
+          },
+
+          logicActionChanged(action) {
+            Object.assign(action, this.defaultAction(action.type));
+          },
+
+          addLogicAction() {
+            this.logic.form.actions = [...this.logic.form.actions, this.defaultAction("audio_play")];
+          },
+
+          removeLogicAction(index) {
+            if (this.logic.form.actions.length <= 1) {
+              return;
+            }
+            this.logic.form.actions = this.logic.form.actions.filter((_, itemIndex) => itemIndex !== index);
+          },
+
+          toggleActionPixelRail(action, rail) {
+            if (action.rails.includes(rail)) {
+              action.rails = action.rails.filter((item) => item !== rail);
+              return;
+            }
+            action.rails = [...action.rails, rail];
+          },
+
+          serializeLogicForm() {
+            const cause = { ...this.logic.form.cause };
+            if (cause.type === "gpio") {
+              cause.state = this.logicBool(cause.state);
+            }
+            if (cause.type === "timer") {
+              cause.repeats = this.logicBool(cause.repeats);
+            }
+            return {
+              id: this.logic.form.id,
+              name: this.logic.form.name,
+              enabled: this.logic.form.enabled,
+              cause,
+              actions: this.logic.form.actions.map((action) => {
+                const payload = { ...action };
+                if (payload.type === "solenoid_set") {
+                  payload.enabled = this.logicBool(payload.enabled);
+                }
+                if (payload.type === "servo_set") {
+                  payload.enable = this.logicBool(payload.enable);
+                }
+                if (payload.type === "pixels_animate") {
+                  payload.start_rgb = this.hexToRgb(payload.start_color || "#000000");
+                  payload.end_rgb = this.hexToRgb(payload.end_color || "#0000ff");
+                  delete payload.start_color;
+                  delete payload.end_color;
+                }
+                return payload;
+              }),
+            };
+          },
+
+          async saveLogicRule() {
+            try {
+              const payload = this.serializeLogicForm();
+              const url = payload.id ? `/api/logic/${payload.id}` : "/api/logic";
+              const response = await fetch(url, {
+                method: payload.id ? "PUT" : "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+              });
+              const result = await response.json();
+              if (!response.ok) {
+                throw new Error(result.error || `HTTP ${response.status}`);
+              }
+              this.logic.message = "Rule saved";
+              await this.loadLogicRules();
+              this.editLogicRule(result.rule);
+            } catch (error) {
+              this.logic.message = `Save failed: ${error.message}`;
+            }
+          },
+
+          async deleteLogicRule() {
+            if (!this.logic.form.id) {
+              return;
+            }
+            try {
+              const response = await fetch(`/api/logic/${this.logic.form.id}`, { method: "DELETE" });
+              const result = await response.json();
+              if (!response.ok) {
+                throw new Error(result.error || `HTTP ${response.status}`);
+              }
+              this.logic.message = "Rule deleted";
+              await this.loadLogicRules();
+              this.newLogicRule();
+            } catch (error) {
+              this.logic.message = `Delete failed: ${error.message}`;
+            }
+          },
+
+          logicRuleSummary(rule) {
+            const cause = rule.cause || {};
+            const actionCount = (rule.actions || []).length;
+            if (cause.type === "boot") {
+              return `On boot, ${actionCount} action${actionCount === 1 ? "" : "s"}`;
+            }
+            if (cause.type === "gpio") {
+              return `Input ${cause.input} ${this.logicBool(cause.state) ? "HIGH" : "LOW"}, ${actionCount} action${actionCount === 1 ? "" : "s"}`;
+            }
+            if (cause.type === "timer") {
+              return `After ${cause.seconds || 0}s${cause.repeats ? " repeating" : ""}, ${actionCount} action${actionCount === 1 ? "" : "s"}`;
+            }
+            if (cause.type === "current_above") {
+              return `${cause.channel} above ${cause.threshold_ma || 0} mA, ${actionCount} action${actionCount === 1 ? "" : "s"}`;
+            }
+            return `${actionCount} action${actionCount === 1 ? "" : "s"}`;
+          },
+
+          logicBool(value) {
+            if (typeof value === "string") {
+              return !["0", "false", "low", "off", "no"].includes(value.toLowerCase());
+            }
+            return Boolean(value);
+          },
+
           syncServoDrafts(payload) {
             const nextDrafts = { ...this.servoDrafts };
             Object.entries(payload.servo_values_map || {}).forEach(([channel, value]) => {
-              nextDrafts[channel] = Number(value);
+              if (!this.servoEditing[channel]) {
+                nextDrafts[channel] = Number(value);
+              }
             });
             this.servoDrafts = nextDrafts;
+          },
+
+          beginServoEdit(channel, value) {
+            const key = String(channel);
+            this.servoEditing = { ...this.servoEditing, [key]: true };
+            this.servoDrafts = { ...this.servoDrafts, [key]: value };
+          },
+
+          commitServoValue(channel, value) {
+            const key = String(channel);
+            this.servoEditing = { ...this.servoEditing, [key]: false };
+            this.setServoValue(channel, value);
           },
 
           startPolling() {
@@ -755,6 +1252,10 @@
               parseInt(hex.slice(2, 4), 16),
               parseInt(hex.slice(4, 6), 16),
             ];
+          },
+
+          rgbToHex(rgb) {
+            return `#${rgb.map((value) => Number(value).toString(16).padStart(2, "0")).join("")}`;
           },
 
           formatBytes(value) {
