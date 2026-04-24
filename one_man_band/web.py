@@ -19,6 +19,7 @@ audio_manager = AudioManager(base_dir)
 logic_store = LogicStore(base_dir / "data" / "logic.sqlite3")
 logic_engine = LogicEngine(logic_store, controller, audio_manager, on_action=lambda: _broadcast_state())
 _poller_started = False
+STATE_POLL_SECONDS = 0.1
 
 
 def _metadata() -> dict[str, object]:
@@ -134,7 +135,7 @@ def _broadcast_state() -> None:
 
 def _poll_state_forever() -> None:
     while True:
-        socketio.sleep(0.5)
+        socketio.sleep(STATE_POLL_SECONDS)
         socketio.emit("state:update", _combined_state(process_logic=True))
 
 

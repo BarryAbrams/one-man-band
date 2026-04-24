@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import threading
 import time
@@ -15,6 +16,7 @@ if TYPE_CHECKING:
 
 
 ActionCallback = Callable[[], None]
+TIMER_NAME_RE = re.compile(r"^[A-Za-z0-9]+$")
 
 
 @dataclass(slots=True)
@@ -30,6 +32,15 @@ class LogicRule:
 
     def to_payload(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(slots=True)
+class CountdownTimer:
+    name: str
+    duration_seconds: float
+    started_at: float
+    generation: int
+    ended: bool = False
 
 
 class LogicStore:
@@ -192,14 +203,26 @@ class LogicEngine:
         self._candidate_since: dict[int, float] = {}
         self._last_branch: dict[int, str] = {}
         self._last_fire: dict[int, float] = {}
-        self._timer_started: dict[int, float] = {}
+        self._timers: dict[str, CountdownTimer] = {}
+        self._timer_generation = 0
+        self._timer_start_seen: set[tuple[int, str, int]] = set()
+        self._timer_end_seen: set[tuple[int, str, int]] = set()
+        self._timer_position_seen: set[tuple[int, str, int, int | None]] = set()
         self._boot_ran = False
 
     def metadata(self) -> dict[str, Any]:
         return {
-            "logic_cause_types": ["boot", "gpio", "current_above", "timer"],
+            "logic_cause_types": [
+                "boot",
+                "gpio",
+                "current_above",
+                "timer_started",
+                "timer_ended",
+                "timer_position",
+            ],
             "logic_action_types": [
                 "audio_play",
+                "timer_set",
                 "solenoid_set",
                 "solenoid_pulse",
                 "servo_set",
@@ -222,7 +245,15 @@ class LogicEngine:
             self._candidate_since.pop(rule_id, None)
             self._last_branch.pop(rule_id, None)
             self._last_fire.pop(rule_id, None)
-            self._timer_started.pop(rule_id, None)
+            self._timer_start_seen = {
+                item for item in self._timer_start_seen if item[0] != rule_id
+            }
+            self._timer_end_seen = {
+                item for item in self._timer_end_seen if item[0] != rule_id
+            }
+            self._timer_position_seen = {
+                item for item in self._timer_position_seen if item[0] != rule_id
+            }
 
     def run_boot_rules(self) -> list[str]:
         with self._lock:
@@ -238,6 +269,7 @@ class LogicEngine:
 
     def process_state(self, state: dict[str, Any]) -> list[str]:
         now = time.monotonic()
+        self._update_timers(now)
         gpio = {
             str(name): bool(value)
             for name, value in dict(state.get("gpio_inputs_map") or {}).items()
@@ -270,8 +302,8 @@ class LogicEngine:
             return self._gpio_branch_to_fire(rule, gpio, now)
         if cause_type == "current_above":
             return self._current_branch_to_fire(rule, state, now)
-        if cause_type == "timer":
-            return "then" if self._timer_should_fire(rule, now) else None
+        if cause_type in {"timer_started", "timer_ended", "timer_position"}:
+            return "then" if self._timer_event_should_fire(rule, now) else None
         return None
 
     def _gpio_branch_to_fire(self, rule: LogicRule, gpio: dict[str, bool], now: float) -> str | None:
@@ -320,18 +352,71 @@ class LogicEngine:
             self._last_branch[rule.id] = branch
             return branch
 
-    def _timer_should_fire(self, rule: LogicRule, now: float) -> bool:
-        seconds = max(0, float(rule.cause.get("seconds", 1)))
-        repeats = self._bool(rule.cause.get("repeats", False))
+    def _timer_event_should_fire(self, rule: LogicRule, now: float) -> bool:
+        timer_name = self._timer_name(rule.cause.get("timer_name") or "")
+        if not timer_name:
+            return False
+
         with self._lock:
-            started = self._timer_started.setdefault(rule.id, now)
-            last_fire = self._last_fire.get(rule.id)
-            if last_fire is not None and not repeats:
+            timer = self._timers.get(timer_name)
+            if timer is None:
                 return False
-            if now - started < seconds:
-                return False
-            self._timer_started[rule.id] = now
-            return True
+
+            cause_type = rule.cause.get("type")
+            if cause_type == "timer_started":
+                key = (rule.id, timer.name, timer.generation)
+                if key in self._timer_start_seen:
+                    return False
+                self._timer_start_seen.add(key)
+                return True
+
+            if cause_type == "timer_ended":
+                key = (rule.id, timer.name, timer.generation)
+                if not timer.ended or key in self._timer_end_seen:
+                    return False
+                self._timer_end_seen.add(key)
+                return True
+
+            if cause_type == "timer_position":
+                percent = self._optional_percent(rule.cause.get("percent"))
+                key = (rule.id, timer.name, timer.generation, percent)
+                if key in self._timer_position_seen:
+                    return False
+                if timer.ended:
+                    return False
+                if percent is None:
+                    self._timer_position_seen.add(key)
+                    return True
+
+                elapsed = now - timer.started_at
+                progress = (elapsed / timer.duration_seconds) * 100 if timer.duration_seconds else 100
+                if progress < percent:
+                    return False
+                self._timer_position_seen.add(key)
+                return True
+
+        return False
+
+    def _update_timers(self, now: float) -> None:
+        with self._lock:
+            for timer in self._timers.values():
+                if not timer.ended and now - timer.started_at >= timer.duration_seconds:
+                    timer.ended = True
+
+    def _set_timer(self, name: str, duration_ms: int) -> None:
+        timer_name = self._timer_name(name)
+        if not timer_name:
+            raise ValueError("Timer name must use only A-Z, a-z, and 0-9")
+        duration_seconds = max(0, duration_ms) / 1000
+        now = time.monotonic()
+        with self._lock:
+            self._timer_generation += 1
+            self._timers[timer_name] = CountdownTimer(
+                name=timer_name,
+                duration_seconds=duration_seconds,
+                started_at=now,
+                generation=self._timer_generation,
+            )
 
     def _fire(self, rule: LogicRule, branch: str = "then") -> None:
         actions = rule.actions if branch == "then" else rule.else_actions
@@ -346,6 +431,11 @@ class LogicEngine:
             filename = str(action.get("filename") or "").strip()
             if filename:
                 self._audio_manager.play(filename, str(action.get("speaker") or "both"))
+        elif action_type == "timer_set":
+            self._set_timer(
+                str(action.get("timer_name") or ""),
+                int(action.get("duration_ms", 1000)),
+            )
         elif action_type == "solenoid_set":
             self._controller.set_solenoid(
                 str(action.get("name") or ""), self._bool(action.get("enabled", True))
@@ -391,3 +481,12 @@ class LogicEngine:
         if isinstance(value, str):
             return value.strip().lower() not in {"0", "false", "low", "off", "no"}
         return bool(value)
+
+    def _timer_name(self, value: Any) -> str:
+        name = str(value or "").strip()
+        return name if TIMER_NAME_RE.match(name) else ""
+
+    def _optional_percent(self, value: Any) -> int | None:
+        if value in (None, ""):
+            return None
+        return max(0, min(100, int(value)))

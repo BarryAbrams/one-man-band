@@ -417,7 +417,9 @@
                     <select id="logic-cause-type" x-model="logic.form.cause.type" @change="logicCauseChanged()">
                       <option value="boot">Script boots</option>
                       <option value="gpio">GPIO changes</option>
-                      <option value="timer">Timer ends</option>
+                      <option value="timer_started">Timer started</option>
+                      <option value="timer_ended">Timer ended</option>
+                      <option value="timer_position">Timer position</option>
                       <option value="current_above">Too many amps are drawn</option>
                     </select>
                   </label>
@@ -440,16 +442,16 @@
                       </select>
                     </label>
                   </template>
-                  <template x-if="logic.form.cause.type === 'timer'">
+                  <template x-if="isTimerCause(logic.form.cause.type)">
                     <label class="field-label">
-                      Seconds
-                      <input type="number" min="0" step="0.1" x-model.number="logic.form.cause.seconds">
+                      Timer Name
+                      <input type="text" pattern="[A-Za-z0-9]+" x-model="logic.form.cause.timer_name" @input="logic.form.cause.timer_name = sanitizeTimerName(logic.form.cause.timer_name)">
                     </label>
                   </template>
-                  <template x-if="logic.form.cause.type === 'timer'">
-                    <label class="check-label">
-                      <input type="checkbox" x-model="logic.form.cause.repeats">
-                      Repeats
+                  <template x-if="logic.form.cause.type === 'timer_position'">
+                    <label class="field-label">
+                      Position %
+                      <input type="number" min="0" max="100" placeholder="Any" x-model="logic.form.cause.percent">
                     </label>
                   </template>
                   <template x-if="logic.form.cause.type === 'current_above'">
@@ -501,6 +503,7 @@
                           Action
                           <select x-model="action.type" @change="logicActionChanged(action)">
                             <option value="audio_play">Play audio</option>
+                            <option value="timer_set">Set timer</option>
                             <option value="solenoid_pulse">Pulse relay</option>
                             <option value="solenoid_set">Set relay</option>
                             <option value="servo_set">Move servo</option>
@@ -528,6 +531,19 @@
                             <option value="right">Right</option>
                             <option value="left">Left</option>
                           </select>
+                        </label>
+                      </div>
+                    </template>
+
+                    <template x-if="action.type === 'timer_set'">
+                      <div class="logic-row">
+                        <label class="field-label">
+                          Timer Name
+                          <input type="text" pattern="[A-Za-z0-9]+" x-model="action.timer_name" @input="action.timer_name = sanitizeTimerName(action.timer_name)">
+                        </label>
+                        <label class="field-label">
+                          Duration ms
+                          <input type="number" min="0" x-model.number="action.duration_ms">
                         </label>
                       </div>
                     </template>
@@ -643,6 +659,7 @@
                           Action
                           <select x-model="action.type" @change="logicActionChanged(action)">
                             <option value="audio_play">Play audio</option>
+                            <option value="timer_set">Set timer</option>
                             <option value="solenoid_pulse">Pulse relay</option>
                             <option value="solenoid_set">Set relay</option>
                             <option value="servo_set">Move servo</option>
@@ -670,6 +687,19 @@
                             <option value="right">Right</option>
                             <option value="left">Left</option>
                           </select>
+                        </label>
+                      </div>
+                    </template>
+
+                    <template x-if="action.type === 'timer_set'">
+                      <div class="logic-row">
+                        <label class="field-label">
+                          Timer Name
+                          <input type="text" pattern="[A-Za-z0-9]+" x-model="action.timer_name" @input="action.timer_name = sanitizeTimerName(action.timer_name)">
+                        </label>
+                        <label class="field-label">
+                          Duration ms
+                          <input type="number" min="0" x-model.number="action.duration_ms">
                         </label>
                       </div>
                     </template>
@@ -926,8 +956,11 @@
             if (type === "boot") {
               return { type: "boot" };
             }
-            if (type === "timer") {
-              return { type: "timer", seconds: 5, repeats: false };
+            if (type === "timer_started" || type === "timer_ended") {
+              return { type, timer_name: "Timer1" };
+            }
+            if (type === "timer_position") {
+              return { type, timer_name: "Timer1", percent: "" };
             }
             if (type === "current_above") {
               return { type: "current_above", channel: firstIna, threshold_ma: 1000, cooldown_ms: 5000 };
@@ -940,6 +973,9 @@
             const firstServo = (this.meta.servos || [0])[0];
             if (type === "audio_play") {
               return { type, filename: "", speaker: "both" };
+            }
+            if (type === "timer_set") {
+              return { type, timer_name: "Timer1", duration_ms: 1000 };
             }
             if (type === "solenoid_set") {
               return { type, name: firstSolenoid, enabled: true };
@@ -1005,6 +1041,9 @@
 
           normalizeLogicAction(action) {
             const normalized = { ...this.defaultAction(action.type || "solenoid_pulse"), ...action };
+            if (normalized.type === "timer_set") {
+              normalized.timer_name = this.sanitizeTimerName(normalized.timer_name || "Timer1");
+            }
             if (normalized.type === "pixels_animate") {
               normalized.rails = normalized.rails || ["1"];
               normalized.start_color = normalized.start_color || this.rgbToHex(normalized.start_rgb || [0, 0, 0]);
@@ -1044,6 +1083,9 @@
           serializeLogicActions(actions) {
             return actions.map((action) => {
               const payload = { ...action };
+              if (payload.type === "timer_set") {
+                payload.timer_name = this.sanitizeTimerName(payload.timer_name || "Timer1");
+              }
               if (payload.type === "solenoid_set") {
                 payload.enabled = this.logicBool(payload.enabled);
               }
@@ -1065,8 +1107,15 @@
             if (cause.type === "gpio") {
               cause.state = this.logicBool(cause.state);
             }
-            if (cause.type === "timer") {
-              cause.repeats = this.logicBool(cause.repeats);
+            if (this.isTimerCause(cause.type)) {
+              cause.timer_name = this.sanitizeTimerName(cause.timer_name || "Timer1");
+            }
+            if (cause.type === "timer_position") {
+              if (cause.percent === "" || cause.percent === null || cause.percent === undefined) {
+                delete cause.percent;
+              } else {
+                cause.percent = Math.max(0, Math.min(100, Number(cause.percent)));
+              }
             }
             return {
               id: this.logic.form.id,
@@ -1128,8 +1177,15 @@
             if (cause.type === "gpio") {
               return `Input ${cause.input} ${this.logicBool(cause.state) ? "HIGH" : "LOW"}, ${actionCount} action${actionCount === 1 ? "" : "s"}${suffix}`;
             }
-            if (cause.type === "timer") {
-              return `After ${cause.seconds || 0}s${cause.repeats ? " repeating" : ""}, ${actionCount} action${actionCount === 1 ? "" : "s"}${suffix}`;
+            if (cause.type === "timer_started") {
+              return `${cause.timer_name || "Timer"} started, ${actionCount} action${actionCount === 1 ? "" : "s"}${suffix}`;
+            }
+            if (cause.type === "timer_ended") {
+              return `${cause.timer_name || "Timer"} ended, ${actionCount} action${actionCount === 1 ? "" : "s"}${suffix}`;
+            }
+            if (cause.type === "timer_position") {
+              const position = cause.percent === undefined ? "any position" : `${cause.percent}%`;
+              return `${cause.timer_name || "Timer"} at ${position}, ${actionCount} action${actionCount === 1 ? "" : "s"}${suffix}`;
             }
             if (cause.type === "current_above") {
               return `${cause.channel} above ${cause.threshold_ma || 0} mA, ${actionCount} action${actionCount === 1 ? "" : "s"}${suffix}`;
@@ -1142,6 +1198,14 @@
               return !["0", "false", "low", "off", "no"].includes(value.toLowerCase());
             }
             return Boolean(value);
+          },
+
+          isTimerCause(type) {
+            return ["timer_started", "timer_ended", "timer_position"].includes(type);
+          },
+
+          sanitizeTimerName(value) {
+            return String(value || "").replace(/[^A-Za-z0-9]/g, "");
           },
 
           syncServoDrafts(payload) {
