@@ -7,6 +7,7 @@ import os
 from flask import Flask, jsonify, render_template, request
 from flask_socketio import SocketIO, emit
 
+from .animations import AnimationStore
 from .audio import AudioManager
 from .device import DeviceController
 from .logic import LogicEngine, LogicStore
@@ -18,6 +19,7 @@ base_dir = Path(__file__).resolve().parent.parent
 audio_manager = AudioManager(base_dir)
 logic_store = LogicStore(base_dir / "data" / "logic.sqlite3")
 logic_engine = LogicEngine(logic_store, controller, audio_manager, on_action=lambda: _broadcast_state())
+animation_store = AnimationStore(base_dir / "data" / "animations.sqlite3")
 _poller_started = False
 STATE_POLL_SECONDS = 0.1
 
@@ -82,6 +84,33 @@ def create_app() -> Flask:
     @app.get("/api/logic")
     def logic_rules():
         return jsonify(logic_engine.rules_payload())
+
+    @app.get("/api/animations")
+    def animations_list():
+        return jsonify({"animations": [animation.to_payload() for animation in animation_store.list_animations()]})
+
+    @app.post("/api/animations")
+    def animations_create():
+        try:
+            animation = animation_store.upsert_animation(request.get_json(force=True) or {})
+        except (TypeError, ValueError) as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        return jsonify({"ok": True, "animation": animation.to_payload()})
+
+    @app.put("/api/animations/<int:animation_id>")
+    def animations_update(animation_id: int):
+        payload = request.get_json(force=True) or {}
+        payload["id"] = animation_id
+        try:
+            animation = animation_store.upsert_animation(payload)
+        except (TypeError, ValueError) as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        return jsonify({"ok": True, "animation": animation.to_payload()})
+
+    @app.delete("/api/animations/<int:animation_id>")
+    def animations_delete(animation_id: int):
+        animation_store.delete_animation(animation_id)
+        return jsonify({"ok": True})
 
     @app.post("/api/logic")
     def logic_create_rule():
@@ -185,6 +214,15 @@ def handle_solenoid_toggle(payload: dict[str, str]):
         state = controller.toggle_solenoid(payload["name"])
         emit("state:update", state.to_payload(), broadcast=True)
     except (KeyError, ValueError) as exc:
+        emit("server:error", {"message": str(exc)})
+
+
+@socketio.on("solenoid:set")
+def handle_solenoid_set(payload: dict[str, object]):
+    try:
+        state = controller.set_solenoid(str(payload["name"]), bool(payload["enabled"]))
+        emit("state:update", state.to_payload(), broadcast=True)
+    except (KeyError, TypeError, ValueError) as exc:
         emit("server:error", {"message": str(exc)})
 
 

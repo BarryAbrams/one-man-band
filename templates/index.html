@@ -25,6 +25,7 @@
         <button class="tab-button" :class="activeTab === 'inputs' ? 'active' : ''" @click="activeTab = 'inputs'">Inputs</button>
         <button class="tab-button" :class="activeTab === 'outputs' ? 'active' : ''" @click="activeTab = 'outputs'">Outputs</button>
         <button class="tab-button" :class="activeTab === 'media' ? 'active' : ''" @click="activeTab = 'media'">Media</button>
+        <button class="tab-button" :class="activeTab === 'animations' ? 'active' : ''" @click="activeTab = 'animations'">Animations</button>
         <button class="tab-button" :class="activeTab === 'logic' ? 'active' : ''" @click="activeTab = 'logic'">Logic</button>
       </section>
 
@@ -366,6 +367,279 @@
         </section>
       </section>
 
+      <section x-show="activeTab === 'animations'" x-cloak class="tab-panel-stack">
+        <section class="panel animation-panel">
+          <div class="section-header">
+            <p class="eyebrow">Animations</p>
+            <h2>Animation Authoring</h2>
+            <p class="section-copy">Build draft timelines for relays, servos, neopixels, and audio layers, then preview them live on the OMB.</p>
+          </div>
+          <div class="animation-layout">
+            <section class="logic-list">
+              <div class="panel-header compact-header">
+                <span class="tile-title">Drafts</span>
+                <button class="secondary" @click="newAnimation()">New Animation</button>
+              </div>
+              <template x-if="!animations.items.length">
+                <p class="tile-subtitle">No animations saved yet.</p>
+              </template>
+              <template x-for="item in animations.items" :key="item.id">
+                <button
+                  class="logic-rule-row"
+                  :class="animations.selectedId === item.id ? 'active' : ''"
+                  @click="editAnimation(item)"
+                >
+                  <span>
+                    <span class="tile-title" x-text="item.name"></span>
+                    <span class="tile-subtitle" x-text="animationSummary(item)"></span>
+                  </span>
+                  <span class="badge" :class="item.published ? 'ok' : ''" x-text="item.published ? 'Published' : 'Draft'"></span>
+                </button>
+              </template>
+            </section>
+
+            <section class="animation-editor">
+              <div class="logic-row">
+                <label class="field-label">
+                  Name
+                  <input type="text" x-model="animations.form.name" @input="scheduleAnimationSave()">
+                </label>
+                <label class="field-label">
+                  Duration ms
+                  <input type="number" min="100" step="100" x-model.number="animations.form.duration_ms" @input="scheduleAnimationSave()">
+                </label>
+                <label class="check-label">
+                  <input type="checkbox" x-model="animations.form.published" @change="scheduleAnimationSave()">
+                  Published
+                </label>
+              </div>
+
+              <div class="animation-toolbar">
+                <div class="actions">
+                  <button class="secondary" @click="addAnimationTrack('solenoid')">Add Relay</button>
+                  <button class="secondary" @click="addAnimationTrack('servo')">Add Servo</button>
+                  <button class="secondary" @click="addAnimationTrack('pixels')">Add Neopixels</button>
+                  <button class="secondary" @click="addAnimationTrack('audio')">Add Audio</button>
+                </div>
+                <div class="actions">
+                  <button class="secondary" @click="playAnimationPreview()" :disabled="animations.playing">Play Live</button>
+                  <button class="secondary" @click="stopAnimationPreview()" :disabled="!animations.playing">Stop</button>
+                  <button class="secondary danger" @click="deleteAnimation()" :disabled="!animations.form.id">Delete</button>
+                </div>
+              </div>
+
+              <template x-if="selectedAnimationTrack()">
+                <section class="animation-inspector">
+                  <div class="panel-header compact-header">
+                    <span class="logic-kicker" x-text="animationTrackTitle(selectedAnimationTrack())"></span>
+                    <button class="secondary" @click="removeAnimationTrack(selectedAnimationTrack().id)">Remove Track</button>
+                  </div>
+                  <div class="logic-row">
+                    <label class="field-label">
+                      Label
+                      <input type="text" x-model="selectedAnimationTrack().label" @input="scheduleAnimationSave()">
+                    </label>
+                    <label class="field-label">
+                      Start ms
+                      <input type="number" min="0" x-model.number="animations.playhead_ms">
+                    </label>
+                    <button class="secondary" @click="addAnimationKeyframe()">Add Keyframe At Playhead</button>
+                  </div>
+
+                  <template x-if="selectedAnimationTrack().type === 'solenoid'">
+                    <div class="logic-row">
+                      <label class="field-label">
+                        Relay
+                        <select x-model="selectedAnimationTrack().target.name" @change="scheduleAnimationSave()">
+                          <template x-for="name in meta.solenoids || []" :key="name">
+                            <option :value="name" x-text="relayLabels[name] || name"></option>
+                          </template>
+                        </select>
+                      </label>
+                    </div>
+                  </template>
+
+                  <template x-if="selectedAnimationTrack().type === 'servo'">
+                    <div class="logic-row">
+                      <label class="field-label">
+                        Servo
+                        <select x-model.number="selectedAnimationTrack().target.channel" @change="scheduleAnimationSave()">
+                          <template x-for="channel in meta.servos || []" :key="channel">
+                            <option :value="channel" x-text="`Servo ${channel}`"></option>
+                          </template>
+                        </select>
+                      </label>
+                    </div>
+                  </template>
+
+                  <template x-if="selectedAnimationTrack().type === 'pixels'">
+                    <div class="logic-row">
+                      <label class="field-label">
+                        Scope
+                        <select x-model="selectedAnimationTrack().target.scope" @change="scheduleAnimationSave()">
+                          <option value="all">All 4 lines</option>
+                          <option value="line">Whole line</option>
+                          <option value="pixel">Specific pixel</option>
+                          <option value="range">Range on one line</option>
+                        </select>
+                      </label>
+                      <template x-if="selectedAnimationTrack().target.scope !== 'all'">
+                        <label class="field-label">
+                          Line
+                          <select x-model="selectedAnimationTrack().target.line" @change="scheduleAnimationSave()">
+                            <template x-for="rail in meta.pixel_rails || []" :key="rail">
+                              <option :value="rail" x-text="`PIX ${rail}`"></option>
+                            </template>
+                          </select>
+                        </label>
+                      </template>
+                      <template x-if="selectedAnimationTrack().target.scope === 'pixel' || selectedAnimationTrack().target.scope === 'range'">
+                        <label class="field-label">
+                          Start Pixel
+                          <input type="number" min="0" max="99" x-model.number="selectedAnimationTrack().target.start" @input="scheduleAnimationSave()">
+                        </label>
+                      </template>
+                      <template x-if="selectedAnimationTrack().target.scope === 'range'">
+                        <label class="field-label">
+                          Count
+                          <input type="number" min="1" max="100" x-model.number="selectedAnimationTrack().target.count" @input="scheduleAnimationSave()">
+                        </label>
+                      </template>
+                    </div>
+                  </template>
+
+                  <template x-if="selectedAnimationTrack().type === 'audio'">
+                    <div class="logic-row">
+                      <label class="field-label">
+                        File
+                        <select x-model="selectedAnimationTrack().target.filename" @change="scheduleAnimationSave()">
+                          <option value="">Choose a track</option>
+                          <template x-for="track in audio.tracks" :key="track.name">
+                            <option :value="track.name" x-text="track.name"></option>
+                          </template>
+                        </select>
+                      </label>
+                      <label class="field-label">
+                        Speaker
+                        <select x-model="selectedAnimationTrack().target.speaker" @change="scheduleAnimationSave()">
+                          <option value="both">Both</option>
+                          <option value="right">Right</option>
+                          <option value="left">Left</option>
+                        </select>
+                      </label>
+                    </div>
+                  </template>
+
+                  <div class="keyframe-list">
+                    <template x-if="!selectedAnimationTrack().keyframes.length">
+                      <p class="tile-subtitle">No keyframes on this track yet.</p>
+                    </template>
+                    <template x-for="(keyframe, keyIndex) in selectedAnimationTrack().keyframes" :key="keyIndex">
+                      <div class="keyframe-row">
+                        <label class="field-label">
+                          Time
+                          <input type="number" min="0" :max="animations.form.duration_ms" x-model.number="keyframe.time_ms" @input="sortAnimationKeyframes(selectedAnimationTrack())">
+                        </label>
+                        <template x-if="selectedAnimationTrack().type === 'solenoid'">
+                          <label class="field-label">
+                            State
+                            <select x-model="keyframe.value" @change="scheduleAnimationSave()">
+                              <option :value="true">HIGH</option>
+                              <option :value="false">LOW</option>
+                            </select>
+                          </label>
+                        </template>
+                        <template x-if="selectedAnimationTrack().type === 'servo'">
+                          <label class="field-label">
+                            Value
+                            <input type="number" min="0" max="255" step="0.1" x-model.number="keyframe.value" @input="scheduleAnimationSave()">
+                          </label>
+                        </template>
+                        <template x-if="selectedAnimationTrack().type === 'servo'">
+                          <label class="field-label">
+                            Curve
+                            <select x-model="keyframe.easing" @change="scheduleAnimationSave()">
+                              <option value="linear">Linear</option>
+                              <option value="ease">Bezier ease</option>
+                              <option value="ease-in">Bezier ease in</option>
+                              <option value="ease-out">Bezier ease out</option>
+                            </select>
+                          </label>
+                        </template>
+                        <template x-if="selectedAnimationTrack().type === 'pixels'">
+                          <label class="field-label">
+                            Color
+                            <input type="color" x-model="keyframe.color" @input="scheduleAnimationSave()">
+                          </label>
+                        </template>
+                        <template x-if="selectedAnimationTrack().type === 'audio'">
+                          <span class="tile-subtitle">Audio starts here</span>
+                        </template>
+                        <button class="secondary" @click="removeAnimationKeyframe(keyIndex)">Remove</button>
+                      </div>
+                    </template>
+                  </div>
+                </section>
+              </template>
+
+              <div class="timeline-shell">
+                <div class="timeline-controls">
+                  <label class="servo-label" for="animation-playhead">
+                    Playhead <span x-text="formatTimerMs(animations.playhead_ms)"></span>
+                  </label>
+                  <input
+                    id="animation-playhead"
+                    class="servo-slider"
+                    type="range"
+                    min="0"
+                    :max="animations.form.duration_ms"
+                    step="10"
+                    x-model.number="animations.playhead_ms"
+                  >
+                </div>
+                <div class="timeline-ruler">
+                  <template x-for="tick in animationTicks()" :key="tick">
+                    <span :style="`left: ${animationTimePercent(tick)}%`" x-text="formatTimerMs(tick)"></span>
+                  </template>
+                </div>
+                <div class="timeline-track-list">
+                  <template x-if="!animations.form.timeline.tracks.length">
+                    <p class="tile-subtitle">Add a track to start building the timeline.</p>
+                  </template>
+                  <template x-for="track in animations.form.timeline.tracks" :key="track.id">
+                    <button
+                      class="timeline-track"
+                      :class="animations.selectedTrackId === track.id ? 'active' : ''"
+                      @click="animations.selectedTrackId = track.id"
+                    >
+                      <span class="timeline-track-label">
+                        <strong x-text="track.label"></strong>
+                        <small x-text="animationTrackSubtitle(track)"></small>
+                      </span>
+                      <span class="timeline-lane">
+                        <span class="timeline-playhead" :style="`left: ${animationTimePercent(animations.playhead_ms)}%`"></span>
+                        <template x-for="(keyframe, keyIndex) in track.keyframes" :key="keyIndex">
+                          <span
+                            class="timeline-key"
+                            :class="`key-${track.type}`"
+                            :style="`left: ${animationTimePercent(keyframe.time_ms)}%; background: ${track.type === 'pixels' ? keyframe.color : ''}`"
+                            :title="`${track.label} @ ${formatTimerMs(keyframe.time_ms)}`"
+                          ></span>
+                        </template>
+                      </span>
+                    </button>
+                  </template>
+                </div>
+              </div>
+
+              <template x-if="animations.message">
+                <p class="tile-subtitle panel-note" x-text="animations.message"></p>
+              </template>
+            </section>
+          </div>
+        </section>
+      </section>
+
       <section x-show="activeTab === 'logic'" x-cloak class="tab-panel-stack">
         <section class="panel">
           <div class="section-header">
@@ -581,8 +855,13 @@
                     <template x-if="action.type === 'animation_play'">
                       <div class="logic-row">
                         <label class="field-label">
-                          Animation Name
-                          <input type="text" x-model="action.animation_name">
+                          Published Animation
+                          <select x-model="action.animation_name">
+                            <option value="">Choose animation</option>
+                            <template x-for="name in publishedAnimationNames()" :key="name">
+                              <option :value="name" x-text="name"></option>
+                            </template>
+                          </select>
                         </label>
                         <label class="check-label">
                           <input type="checkbox" x-model="action.interrupt">
@@ -797,8 +1076,13 @@
                     <template x-if="action.type === 'animation_play'">
                       <div class="logic-row">
                         <label class="field-label">
-                          Animation Name
-                          <input type="text" x-model="action.animation_name">
+                          Published Animation
+                          <select x-model="action.animation_name">
+                            <option value="">Choose animation</option>
+                            <template x-for="name in publishedAnimationNames()" :key="name">
+                              <option :value="name" x-text="name"></option>
+                            </template>
+                          </select>
                         </label>
                         <label class="check-label">
                           <input type="checkbox" x-model="action.interrupt">
@@ -1046,6 +1330,22 @@
               else_actions: [],
             },
           },
+          animations: {
+            items: [],
+            selectedId: null,
+            selectedTrackId: null,
+            playhead_ms: 0,
+            playing: false,
+            saveHandle: null,
+            message: "",
+            form: {
+              id: null,
+              name: "New animation",
+              published: false,
+              duration_ms: 5000,
+              timeline: { tracks: [] },
+            },
+          },
           actionToasts: [],
           seenActionEventIds: [],
           uploadFile: null,
@@ -1056,6 +1356,7 @@
             this.loadState();
             this.loadAudioLibrary();
             this.loadLogicRules();
+            this.loadAnimations();
             this.startPolling();
 
             if (typeof io === "undefined") {
@@ -1099,6 +1400,389 @@
                 error: payload.message || "Unknown server error",
               };
             });
+          },
+
+          defaultAnimation() {
+            return {
+              id: null,
+              name: "New animation",
+              published: false,
+              duration_ms: 5000,
+              timeline: { tracks: [] },
+            };
+          },
+
+          defaultAnimationTrack(type = "solenoid") {
+            const id = `track-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+            const firstSolenoid = (this.meta.solenoids || ["P0"])[0];
+            const firstServo = (this.meta.servos || [0])[0];
+            const firstRail = (this.meta.pixel_rails || ["1"])[0];
+            const base = { id, type, label: "", target: {}, keyframes: [] };
+            if (type === "servo") {
+              return {
+                ...base,
+                label: `Servo ${firstServo}`,
+                target: { channel: firstServo },
+                keyframes: [{ time_ms: 0, value: 127, easing: "ease" }],
+              };
+            }
+            if (type === "pixels") {
+              return {
+                ...base,
+                label: "Neopixels",
+                target: { scope: "line", line: firstRail, start: 0, count: 1 },
+                keyframes: [{ time_ms: 0, color: "#0000ff" }],
+              };
+            }
+            if (type === "audio") {
+              return {
+                ...base,
+                label: "Audio",
+                target: { filename: "", speaker: "both" },
+                keyframes: [{ time_ms: 0 }],
+              };
+            }
+            return {
+              ...base,
+              label: this.relayLabels[firstSolenoid] || firstSolenoid,
+              target: { name: firstSolenoid },
+              keyframes: [{ time_ms: 0, value: true }],
+            };
+          },
+
+          normalizeAnimation(animation) {
+            const normalized = {
+              ...this.defaultAnimation(),
+              ...animation,
+              timeline: animation.timeline || { tracks: [] },
+            };
+            normalized.timeline.tracks = (normalized.timeline.tracks || []).map((track) => {
+              const defaults = this.defaultAnimationTrack(track.type || "solenoid");
+              return {
+                ...defaults,
+                ...track,
+                target: { ...defaults.target, ...(track.target || {}) },
+                keyframes: Array.isArray(track.keyframes) ? track.keyframes : defaults.keyframes,
+              };
+            });
+            return normalized;
+          },
+
+          async loadAnimations() {
+            try {
+              const response = await fetch("/api/animations");
+              if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+              }
+              const payload = await response.json();
+              this.animations.items = payload.animations || [];
+            } catch (error) {
+              this.animations.message = `Unable to load animations: ${error.message}`;
+            }
+          },
+
+          newAnimation() {
+            this.stopAnimationPreview();
+            this.animations.selectedId = null;
+            this.animations.selectedTrackId = null;
+            this.animations.playhead_ms = 0;
+            this.animations.message = "";
+            this.animations.form = this.defaultAnimation();
+            this.scheduleAnimationSave();
+          },
+
+          editAnimation(animation) {
+            this.stopAnimationPreview();
+            const normalized = this.normalizeAnimation(animation);
+            this.animations.selectedId = normalized.id;
+            this.animations.selectedTrackId = normalized.timeline.tracks[0]?.id || null;
+            this.animations.playhead_ms = 0;
+            this.animations.message = "";
+            this.animations.form = normalized;
+          },
+
+          scheduleAnimationSave() {
+            if (this.animations.saveHandle) {
+              clearTimeout(this.animations.saveHandle);
+            }
+            this.animations.message = "Saving draft...";
+            this.animations.saveHandle = setTimeout(() => this.saveAnimation(), 450);
+          },
+
+          async saveAnimation() {
+            try {
+              const payload = this.serializeAnimation();
+              const url = payload.id ? `/api/animations/${payload.id}` : "/api/animations";
+              const response = await fetch(url, {
+                method: payload.id ? "PUT" : "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+              });
+              const result = await response.json();
+              if (!response.ok) {
+                throw new Error(result.error || `HTTP ${response.status}`);
+              }
+              const saved = result.animation;
+              this.animations.form.id = saved.id;
+              this.animations.selectedId = saved.id;
+              this.animations.message = saved.published ? "Published and saved" : "Draft saved";
+              await this.loadAnimations();
+            } catch (error) {
+              this.animations.message = `Save failed: ${error.message}`;
+            }
+          },
+
+          serializeAnimation() {
+            const form = this.animations.form;
+            return {
+              id: form.id,
+              name: String(form.name || "New animation").trim(),
+              published: Boolean(form.published),
+              duration_ms: Math.max(100, Number(form.duration_ms) || 5000),
+              timeline: {
+                tracks: (form.timeline.tracks || []).map((track) => ({
+                  ...track,
+                  keyframes: [...(track.keyframes || [])].sort((a, b) => Number(a.time_ms || 0) - Number(b.time_ms || 0)),
+                })),
+              },
+            };
+          },
+
+          async deleteAnimation() {
+            if (!this.animations.form.id) {
+              return;
+            }
+            try {
+              const response = await fetch(`/api/animations/${this.animations.form.id}`, { method: "DELETE" });
+              const result = await response.json();
+              if (!response.ok) {
+                throw new Error(result.error || `HTTP ${response.status}`);
+              }
+              await this.loadAnimations();
+              this.animations.message = "Animation deleted";
+              this.animations.form = this.defaultAnimation();
+              this.animations.selectedId = null;
+              this.animations.selectedTrackId = null;
+            } catch (error) {
+              this.animations.message = `Delete failed: ${error.message}`;
+            }
+          },
+
+          addAnimationTrack(type) {
+            const track = this.defaultAnimationTrack(type);
+            this.animations.form.timeline.tracks = [...this.animations.form.timeline.tracks, track];
+            this.animations.selectedTrackId = track.id;
+            this.scheduleAnimationSave();
+          },
+
+          removeAnimationTrack(trackId) {
+            this.animations.form.timeline.tracks = this.animations.form.timeline.tracks.filter((track) => track.id !== trackId);
+            this.animations.selectedTrackId = this.animations.form.timeline.tracks[0]?.id || null;
+            this.scheduleAnimationSave();
+          },
+
+          selectedAnimationTrack() {
+            return (this.animations.form.timeline.tracks || []).find((track) => track.id === this.animations.selectedTrackId) || null;
+          },
+
+          addAnimationKeyframe() {
+            const track = this.selectedAnimationTrack();
+            if (!track) {
+              return;
+            }
+            const time = Math.max(0, Math.min(Number(this.animations.playhead_ms) || 0, Number(this.animations.form.duration_ms) || 0));
+            let keyframe = { time_ms: time };
+            if (track.type === "servo") {
+              keyframe = { ...keyframe, value: 127, easing: "ease" };
+            } else if (track.type === "pixels") {
+              keyframe = { ...keyframe, color: "#0000ff" };
+            } else if (track.type === "solenoid") {
+              keyframe = { ...keyframe, value: true };
+            }
+            track.keyframes = [...(track.keyframes || []), keyframe];
+            this.sortAnimationKeyframes(track);
+          },
+
+          removeAnimationKeyframe(index) {
+            const track = this.selectedAnimationTrack();
+            if (!track) {
+              return;
+            }
+            track.keyframes = track.keyframes.filter((_, itemIndex) => itemIndex !== index);
+            this.scheduleAnimationSave();
+          },
+
+          sortAnimationKeyframes(track) {
+            track.keyframes = [...(track.keyframes || [])].sort((a, b) => Number(a.time_ms || 0) - Number(b.time_ms || 0));
+            this.scheduleAnimationSave();
+          },
+
+          animationSummary(animation) {
+            const count = animation.timeline?.tracks?.length || 0;
+            return `${this.formatTimerMs(animation.duration_ms)} · ${count} track${count === 1 ? "" : "s"}`;
+          },
+
+          publishedAnimationNames() {
+            return (this.animations.items || [])
+              .filter((animation) => animation.published)
+              .map((animation) => animation.name);
+          },
+
+          animationTrackTitle(track) {
+            return `${track.type} track`;
+          },
+
+          animationTrackSubtitle(track) {
+            if (track.type === "audio") {
+              return track.target.filename || "No file selected";
+            }
+            if (track.type === "servo") {
+              return `Servo ${track.target.channel}`;
+            }
+            if (track.type === "pixels") {
+              return this.pixelTargetLabel(track.target);
+            }
+            return this.relayLabels[track.target.name] || track.target.name || "Relay";
+          },
+
+          pixelTargetLabel(target) {
+            if (target.scope === "all") {
+              return "All lines";
+            }
+            if (target.scope === "pixel") {
+              return `PIX ${target.line} pixel ${target.start}`;
+            }
+            if (target.scope === "range") {
+              return `PIX ${target.line} ${target.start}-${Number(target.start || 0) + Number(target.count || 1) - 1}`;
+            }
+            return `PIX ${target.line}`;
+          },
+
+          animationTicks() {
+            const duration = Math.max(100, Number(this.animations.form.duration_ms) || 5000);
+            const count = 5;
+            return Array.from({ length: count + 1 }, (_, index) => Math.round((duration / count) * index));
+          },
+
+          animationTimePercent(timeMs) {
+            const duration = Math.max(1, Number(this.animations.form.duration_ms) || 1);
+            return Math.max(0, Math.min(100, (Number(timeMs || 0) / duration) * 100));
+          },
+
+          playAnimationPreview() {
+            if (!this.socketConnected || !this.socket) {
+              this.animations.message = "Socket is not connected";
+              return;
+            }
+            this.stopAnimationPreview(false);
+            this.animations.playing = true;
+            this.animations.message = "Playing live preview";
+            this.animations.playTimers = [];
+            this.animations.lastServoFrame = -100;
+            const startedAt = performance.now();
+            const duration = Number(this.animations.form.duration_ms) || 0;
+            const tick = () => {
+              const elapsed = performance.now() - startedAt;
+              this.animations.playhead_ms = Math.min(duration, Math.round(elapsed));
+              this.applyServoAnimationFrame(elapsed);
+              if (elapsed < duration && this.animations.playing) {
+                this.animations.raf = requestAnimationFrame(tick);
+              } else {
+                this.animations.playing = false;
+              }
+            };
+            (this.animations.form.timeline.tracks || []).forEach((track) => {
+              if (track.type === "servo") {
+                return;
+              }
+              (track.keyframes || []).forEach((keyframe) => {
+                const timer = setTimeout(() => this.applyAnimationKeyframe(track, keyframe), Math.max(0, Number(keyframe.time_ms) || 0));
+                this.animations.playTimers.push(timer);
+              });
+            });
+            this.animations.raf = requestAnimationFrame(tick);
+          },
+
+          stopAnimationPreview(clearMessage = true) {
+            (this.animations.playTimers || []).forEach((timer) => clearTimeout(timer));
+            if (this.animations.raf) {
+              cancelAnimationFrame(this.animations.raf);
+            }
+            this.animations.playTimers = [];
+            this.animations.raf = null;
+            this.animations.playing = false;
+            if (clearMessage) {
+              this.animations.message = "Preview stopped";
+            }
+          },
+
+          applyAnimationKeyframe(track, keyframe) {
+            if (!this.socketConnected || !this.socket) {
+              return;
+            }
+            if (track.type === "solenoid") {
+              this.socket.emit("solenoid:set", { name: track.target.name, enabled: Boolean(keyframe.value) });
+            }
+            if (track.type === "pixels") {
+              this.socket.emit("pixels:animate", this.pixelAnimationPayload(track, keyframe));
+            }
+            if (track.type === "audio" && track.target.filename) {
+              this.socket.emit("audio:play", { filename: track.target.filename, speaker: track.target.speaker || "both" });
+            }
+          },
+
+          applyServoAnimationFrame(elapsedMs) {
+            if (elapsedMs - (this.animations.lastServoFrame || 0) < 50) {
+              return;
+            }
+            this.animations.lastServoFrame = elapsedMs;
+            (this.animations.form.timeline.tracks || []).filter((track) => track.type === "servo").forEach((track) => {
+              const keyframes = [...(track.keyframes || [])].sort((a, b) => Number(a.time_ms || 0) - Number(b.time_ms || 0));
+              if (!keyframes.length) {
+                return;
+              }
+              const nextIndex = keyframes.findIndex((keyframe) => Number(keyframe.time_ms || 0) >= elapsedMs);
+              const current = nextIndex <= 0 ? keyframes[0] : keyframes[nextIndex - 1];
+              const next = nextIndex <= 0 ? keyframes[0] : keyframes[nextIndex] || current;
+              const span = Math.max(1, Number(next.time_ms || 0) - Number(current.time_ms || 0));
+              const rawT = current === next ? 1 : (elapsedMs - Number(current.time_ms || 0)) / span;
+              const t = this.animationEase(Math.max(0, Math.min(1, rawT)), current.easing || "linear");
+              const value = Number(current.value || 0) + (Number(next.value || 0) - Number(current.value || 0)) * t;
+              this.socket.emit("servo:set_value", { channel: track.target.channel, value });
+            });
+          },
+
+          animationEase(t, easing) {
+            if (easing === "ease-in") {
+              return t * t;
+            }
+            if (easing === "ease-out") {
+              return 1 - Math.pow(1 - t, 2);
+            }
+            if (easing === "ease") {
+              return t * t * (3 - 2 * t);
+            }
+            return t;
+          },
+
+          pixelAnimationPayload(track, keyframe) {
+            const target = track.target || {};
+            const rails = target.scope === "all" ? (this.meta.pixel_rails || []) : [target.line || "1"];
+            const start = target.scope === "line" || target.scope === "all" ? 0 : Number(target.start || 0);
+            const count = target.scope === "pixel" ? 1 : (target.scope === "range" ? Number(target.count || 1) : 0);
+            const keyframes = [...(track.keyframes || [])].sort((a, b) => Number(a.time_ms || 0) - Number(b.time_ms || 0));
+            const index = keyframes.indexOf(keyframe);
+            const next = keyframes[index + 1];
+            const duration = next ? Math.max(0, Number(next.time_ms || 0) - Number(keyframe.time_ms || 0)) : 100;
+            return {
+              rails,
+              start,
+              count,
+              start_rgb: this.hexToRgb(keyframe.color || "#000000"),
+              end_rgb: this.hexToRgb(next?.color || keyframe.color || "#000000"),
+              duration_ms: duration,
+              animation_id: 0,
+            };
           },
 
           defaultCause(type = "") {
