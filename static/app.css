@@ -652,6 +652,53 @@ button:hover {
       transparent 10%
     ),
     rgba(239, 229, 216, 0.55);
+  overflow: hidden;
+}
+
+.timeline-visual {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.timeline-state-line {
+  fill: none;
+  stroke-width: 5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.muted-line {
+  stroke: rgba(78, 60, 33, 0.26);
+}
+
+.relay-line {
+  stroke: var(--warm);
+}
+
+.servo-line {
+  stroke: var(--accent);
+}
+
+.pixel-band {
+  opacity: 0.92;
+}
+
+.waveform-bar {
+  fill: #5d6fb7;
+  opacity: 0.76;
+}
+
+.timeline-axis-label {
+  fill: rgba(31, 26, 20, 0.56);
+  font-size: 8px;
+  font-weight: 800;
+  paint-order: stroke;
+  stroke: rgba(255, 250, 241, 0.72);
+  stroke-width: 2px;
 }
 
 .timeline-key {

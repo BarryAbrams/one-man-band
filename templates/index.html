@@ -617,6 +617,7 @@
                         <small x-text="animationTrackSubtitle(track)"></small>
                       </span>
                       <span class="timeline-lane">
+                        <svg class="timeline-visual" viewBox="0 0 100 100" preserveAspectRatio="none" x-html="timelineVisual(track)"></svg>
                         <span class="timeline-playhead" :style="`left: ${animationTimePercent(animations.playhead_ms)}%`"></span>
                         <template x-for="(keyframe, keyIndex) in track.keyframes" :key="keyIndex">
                           <span
@@ -1336,6 +1337,9 @@
             selectedTrackId: null,
             playhead_ms: 0,
             playing: false,
+            playTimers: [],
+            raf: null,
+            waveforms: {},
             saveHandle: null,
             message: "",
             form: {
@@ -1446,7 +1450,10 @@
               ...base,
               label: this.relayLabels[firstSolenoid] || firstSolenoid,
               target: { name: firstSolenoid },
-              keyframes: [{ time_ms: 0, value: true }],
+              keyframes: [
+                { time_ms: 0, value: true },
+                { time_ms: 250, value: false },
+              ],
             };
           },
 
@@ -1669,6 +1676,154 @@
             return Math.max(0, Math.min(100, (Number(timeMs || 0) / duration) * 100));
           },
 
+          timelineVisual(track) {
+            if (track.type === "solenoid") {
+              return this.solenoidTimelineVisual(track);
+            }
+            if (track.type === "servo") {
+              return this.servoTimelineVisual(track);
+            }
+            if (track.type === "pixels") {
+              return this.pixelTimelineVisual(track);
+            }
+            if (track.type === "audio") {
+              return this.audioTimelineVisual(track);
+            }
+            return "";
+          },
+
+          solenoidTimelineVisual(track) {
+            const keyframes = this.sortedKeyframes(track);
+            const yLow = 76;
+            const yHigh = 24;
+            if (!keyframes.length) {
+              return `<path class="timeline-state-line muted-line" d="M 0 ${yLow} L 100 ${yLow}"></path>`;
+            }
+            let path = "";
+            let previousX = 0;
+            let previousY = keyframes[0].value ? yHigh : yLow;
+            path += `M 0 ${previousY}`;
+            keyframes.forEach((keyframe) => {
+              const x = this.animationTimePercent(keyframe.time_ms);
+              const y = this.logicBool(keyframe.value) ? yHigh : yLow;
+              path += ` L ${x} ${previousY} L ${x} ${y}`;
+              previousX = x;
+              previousY = y;
+            });
+            path += ` L 100 ${previousY}`;
+            return `<path class="timeline-state-line relay-line" d="${path}"></path><text class="timeline-axis-label" x="1" y="22">HIGH</text><text class="timeline-axis-label" x="1" y="88">LOW</text>`;
+          },
+
+          servoTimelineVisual(track) {
+            const keyframes = this.sortedKeyframes(track);
+            if (!keyframes.length) {
+              return "";
+            }
+            const points = keyframes.map((keyframe) => ({
+              x: this.animationTimePercent(keyframe.time_ms),
+              y: this.servoTimelineY(keyframe.value),
+              easing: keyframe.easing || "linear",
+            }));
+            let path = `M ${points[0].x} ${points[0].y}`;
+            for (let index = 1; index < points.length; index += 1) {
+              const previous = points[index - 1];
+              const point = points[index];
+              if (previous.easing === "linear") {
+                path += ` L ${point.x} ${point.y}`;
+              } else {
+                const distance = point.x - previous.x;
+                const cp1x = previous.easing === "ease-in" ? previous.x + distance * 0.18 : previous.x + distance * 0.38;
+                const cp2x = previous.easing === "ease-out" ? previous.x + distance * 0.82 : previous.x + distance * 0.62;
+                path += ` C ${cp1x} ${previous.y}, ${cp2x} ${point.y}, ${point.x} ${point.y}`;
+              }
+            }
+            return `<path class="timeline-state-line servo-line" d="${path}"></path><text class="timeline-axis-label" x="1" y="16">255</text><text class="timeline-axis-label" x="1" y="92">0</text>`;
+          },
+
+          pixelTimelineVisual(track) {
+            const keyframes = this.sortedKeyframes(track);
+            if (!keyframes.length) {
+              return "";
+            }
+            return keyframes.map((keyframe, index) => {
+              const start = this.animationTimePercent(keyframe.time_ms);
+              const next = keyframes[index + 1];
+              const end = next ? this.animationTimePercent(next.time_ms) : 100;
+              const width = Math.max(0.5, end - start);
+              const from = keyframe.color || "#000000";
+              const to = next?.color || from;
+              const id = `grad-${track.id}-${index}`.replace(/[^A-Za-z0-9_-]/g, "");
+              return `<defs><linearGradient id="${id}" x1="0%" x2="100%" y1="0%" y2="0%"><stop offset="0%" stop-color="${from}"></stop><stop offset="100%" stop-color="${to}"></stop></linearGradient></defs><rect class="pixel-band" x="${start}" y="22" width="${width}" height="56" fill="url(#${id})"></rect>`;
+            }).join("");
+          },
+
+          audioTimelineVisual(track) {
+            this.ensureAudioWaveform(track);
+            const filename = track.target?.filename || "";
+            const bars = this.animations.waveforms[filename] || this.placeholderWaveform(filename);
+            const keyframes = this.sortedKeyframes(track);
+            const start = this.animationTimePercent(keyframes[0]?.time_ms || 0);
+            const usableWidth = Math.max(0, 100 - start);
+            return bars.map((height, index) => {
+              const width = usableWidth / bars.length;
+              const x = start + index * width;
+              const y = 50 - height * 36;
+              return `<rect class="waveform-bar" x="${x.toFixed(3)}" y="${y.toFixed(3)}" width="${Math.max(0.2, width * 0.64).toFixed(3)}" height="${(height * 72).toFixed(3)}"></rect>`;
+            }).join("");
+          },
+
+          sortedKeyframes(track) {
+            return [...(track.keyframes || [])].sort((a, b) => Number(a.time_ms || 0) - Number(b.time_ms || 0));
+          },
+
+          servoTimelineY(value) {
+            const clamped = Math.max(0, Math.min(255, Number(value) || 0));
+            return 88 - (clamped / 255) * 76;
+          },
+
+          placeholderWaveform(filename) {
+            const seed = String(filename || "audio").split("").reduce((total, char) => total + char.charCodeAt(0), 0);
+            return Array.from({ length: 64 }, (_, index) => {
+              const value = Math.sin((index + 1) * (seed % 11 + 3)) * 0.5 + 0.5;
+              return 0.18 + value * 0.72;
+            });
+          },
+
+          ensureAudioWaveform(track) {
+            const filename = track.target?.filename || "";
+            if (!filename || this.animations.waveforms[filename]) {
+              return;
+            }
+            this.animations.waveforms = { ...this.animations.waveforms, [filename]: this.placeholderWaveform(filename) };
+            if (!window.AudioContext && !window.webkitAudioContext) {
+              return;
+            }
+            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+            const context = new AudioContextClass();
+            fetch(`/api/audio/files/${encodeURIComponent(filename)}`)
+              .then((response) => response.arrayBuffer())
+              .then((buffer) => context.decodeAudioData(buffer))
+              .then((audioBuffer) => {
+                const data = audioBuffer.getChannelData(0);
+                const bars = 96;
+                const samplesPerBar = Math.max(1, Math.floor(data.length / bars));
+                const waveform = Array.from({ length: bars }, (_, barIndex) => {
+                  let peak = 0;
+                  const start = barIndex * samplesPerBar;
+                  const end = Math.min(data.length, start + samplesPerBar);
+                  for (let index = start; index < end; index += 1) {
+                    peak = Math.max(peak, Math.abs(data[index]));
+                  }
+                  return Math.max(0.04, Math.min(1, peak));
+                });
+                this.animations.waveforms = { ...this.animations.waveforms, [filename]: waveform };
+              })
+              .catch(() => {
+                this.animations.waveforms = { ...this.animations.waveforms, [filename]: this.placeholderWaveform(filename) };
+              })
+              .finally(() => context.close?.());
+          },
+
           playAnimationPreview() {
             if (!this.socketConnected || !this.socket) {
               this.animations.message = "Socket is not connected";
@@ -1688,7 +1843,7 @@
               if (elapsed < duration && this.animations.playing) {
                 this.animations.raf = requestAnimationFrame(tick);
               } else {
-                this.animations.playing = false;
+                this.finishAnimationPreview();
               }
             };
             (this.animations.form.timeline.tracks || []).forEach((track) => {
@@ -1711,8 +1866,43 @@
             this.animations.playTimers = [];
             this.animations.raf = null;
             this.animations.playing = false;
+            this.setAnimationRelaysLow();
+            this.stopAnimationAudio();
             if (clearMessage) {
               this.animations.message = "Preview stopped";
+            }
+          },
+
+          finishAnimationPreview() {
+            (this.animations.playTimers || []).forEach((timer) => clearTimeout(timer));
+            this.animations.playTimers = [];
+            this.animations.raf = null;
+            this.animations.playing = false;
+            this.setAnimationRelaysLow();
+            this.stopAnimationAudio();
+          },
+
+          setAnimationRelaysLow() {
+            if (!this.socketConnected || !this.socket) {
+              return;
+            }
+            const relayNames = new Set(
+              (this.animations.form.timeline.tracks || [])
+                .filter((track) => track.type === "solenoid" && track.target?.name)
+                .map((track) => track.target.name)
+            );
+            relayNames.forEach((name) => {
+              this.socket.emit("solenoid:set", { name, enabled: false });
+            });
+          },
+
+          stopAnimationAudio() {
+            if (!this.socketConnected || !this.socket) {
+              return;
+            }
+            const hasAudio = (this.animations.form.timeline.tracks || []).some((track) => track.type === "audio");
+            if (hasAudio) {
+              this.socket.emit("audio:stop");
             }
           },
 

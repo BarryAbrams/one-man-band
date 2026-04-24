@@ -4,7 +4,7 @@ from pathlib import Path
 
 import os
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, send_from_directory
 from flask_socketio import SocketIO, emit
 
 from .animations import AnimationStore
@@ -80,6 +80,10 @@ def create_app() -> Flask:
                 "status": audio_manager.status().to_payload(),
             }
         )
+
+    @app.get("/api/audio/files/<path:filename>")
+    def audio_file(filename: str):
+        return send_from_directory(audio_manager.audio_dir, filename)
 
     @app.get("/api/logic")
     def logic_rules():
