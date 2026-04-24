@@ -24,6 +24,7 @@ class LogicRule:
     enabled: bool
     cause: dict[str, Any]
     actions: list[dict[str, Any]]
+    else_actions: list[dict[str, Any]]
     created_at: float
     updated_at: float
 
@@ -53,11 +54,20 @@ class LogicStore:
                     enabled INTEGER NOT NULL DEFAULT 1,
                     cause_json TEXT NOT NULL,
                     actions_json TEXT NOT NULL,
+                    else_actions_json TEXT NOT NULL DEFAULT '[]',
                     created_at REAL NOT NULL,
                     updated_at REAL NOT NULL
                 )
                 """
             )
+            columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(logic_rules)").fetchall()
+            }
+            if "else_actions_json" not in columns:
+                connection.execute(
+                    "ALTER TABLE logic_rules ADD COLUMN else_actions_json TEXT NOT NULL DEFAULT '[]'"
+                )
 
     def list_rules(self) -> list[LogicRule]:
         with self._lock, self._connect() as connection:
@@ -72,6 +82,7 @@ class LogicStore:
         enabled = bool(payload.get("enabled", True))
         cause = self._dict_field(payload, "cause")
         actions = self._actions_field(payload)
+        else_actions = self._optional_actions_field(payload, "else_actions")
         rule_id = payload.get("id")
 
         with self._lock, self._connect() as connection:
@@ -79,7 +90,7 @@ class LogicStore:
                 connection.execute(
                     """
                     UPDATE logic_rules
-                    SET name = ?, enabled = ?, cause_json = ?, actions_json = ?, updated_at = ?
+                    SET name = ?, enabled = ?, cause_json = ?, actions_json = ?, else_actions_json = ?, updated_at = ?
                     WHERE id = ?
                     """,
                     (
@@ -87,6 +98,7 @@ class LogicStore:
                         int(enabled),
                         json.dumps(cause, sort_keys=True),
                         json.dumps(actions, sort_keys=True),
+                        json.dumps(else_actions, sort_keys=True),
                         now,
                         int(rule_id),
                     ),
@@ -101,14 +113,15 @@ class LogicStore:
             cursor = connection.execute(
                 """
                 INSERT INTO logic_rules
-                    (name, enabled, cause_json, actions_json, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                    (name, enabled, cause_json, actions_json, else_actions_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     name,
                     int(enabled),
                     json.dumps(cause, sort_keys=True),
                     json.dumps(actions, sort_keys=True),
+                    json.dumps(else_actions, sort_keys=True),
                     now,
                     now,
                 ),
@@ -129,6 +142,7 @@ class LogicStore:
             enabled=bool(row["enabled"]),
             cause=json.loads(str(row["cause_json"])),
             actions=json.loads(str(row["actions_json"])),
+            else_actions=json.loads(str(row["else_actions_json"])),
             created_at=float(row["created_at"]),
             updated_at=float(row["updated_at"]),
         )
@@ -145,6 +159,16 @@ class LogicStore:
             raise ValueError("Rule must have at least one action")
         if not all(isinstance(action, dict) for action in value):
             raise ValueError("Rule actions must be objects")
+        return value
+
+    def _optional_actions_field(self, payload: dict[str, Any], key: str) -> list[dict[str, Any]]:
+        value = payload.get(key, [])
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise ValueError(f"Rule {key} must be a list")
+        if not all(isinstance(action, dict) for action in value):
+            raise ValueError(f"Rule {key} entries must be objects")
         return value
 
 
@@ -164,6 +188,9 @@ class LogicEngine:
         self._previous_gpio: dict[str, bool] = {}
         self._stable_since: dict[int, float] = {}
         self._armed_state: dict[int, bool] = {}
+        self._candidate_branch: dict[int, str] = {}
+        self._candidate_since: dict[int, float] = {}
+        self._last_branch: dict[int, str] = {}
         self._last_fire: dict[int, float] = {}
         self._timer_started: dict[int, float] = {}
         self._boot_ran = False
@@ -191,6 +218,9 @@ class LogicEngine:
         with self._lock:
             self._stable_since.pop(rule_id, None)
             self._armed_state.pop(rule_id, None)
+            self._candidate_branch.pop(rule_id, None)
+            self._candidate_since.pop(rule_id, None)
+            self._last_branch.pop(rule_id, None)
             self._last_fire.pop(rule_id, None)
             self._timer_started.pop(rule_id, None)
 
@@ -217,68 +247,78 @@ class LogicEngine:
         for rule in self._store.list_rules():
             if not rule.enabled:
                 continue
-            if self._should_fire(rule, state, gpio, now):
-                self._fire(rule)
-                self._last_fire[rule.id] = now
+            branch = self._branch_to_fire(rule, state, gpio, now)
+            if branch:
+                self._fire(rule, branch)
+                if branch == "then":
+                    self._last_fire[rule.id] = now
                 fired.append(rule.name)
 
         with self._lock:
             self._previous_gpio = gpio
         return fired
 
-    def _should_fire(
+    def _branch_to_fire(
         self,
         rule: LogicRule,
         state: dict[str, Any],
         gpio: dict[str, bool],
         now: float,
-    ) -> bool:
+    ) -> str | None:
         cause_type = rule.cause.get("type")
         if cause_type == "gpio":
-            return self._gpio_should_fire(rule, gpio, now)
+            return self._gpio_branch_to_fire(rule, gpio, now)
         if cause_type == "current_above":
-            return self._current_should_fire(rule, state, now)
+            return self._current_branch_to_fire(rule, state, now)
         if cause_type == "timer":
-            return self._timer_should_fire(rule, now)
-        return False
+            return "then" if self._timer_should_fire(rule, now) else None
+        return None
 
-    def _gpio_should_fire(self, rule: LogicRule, gpio: dict[str, bool], now: float) -> bool:
+    def _gpio_branch_to_fire(self, rule: LogicRule, gpio: dict[str, bool], now: float) -> str | None:
         input_name = str(rule.cause.get("input") or "")
         expected = self._bool(rule.cause.get("state", True))
         debounce_seconds = max(0, int(rule.cause.get("debounce_ms", 50))) / 1000
         cooldown_seconds = max(0, int(rule.cause.get("cooldown_ms", 1000))) / 1000
         current = gpio.get(input_name, False)
-        previous = self._previous_gpio.get(input_name, current)
+        branch = "then" if current == expected else "else"
 
         with self._lock:
-            if current != expected:
-                self._stable_since.pop(rule.id, None)
-                self._armed_state[rule.id] = False
-                return False
+            if self._candidate_branch.get(rule.id) != branch:
+                self._candidate_branch[rule.id] = branch
+                self._candidate_since[rule.id] = now
+                return None
 
-            if previous != current and not self._armed_state.get(rule.id, False):
-                self._stable_since[rule.id] = now
-
-            stable_since = self._stable_since.setdefault(rule.id, now)
-            last_fire = self._last_fire.get(rule.id, 0)
-            if self._armed_state.get(rule.id, False):
-                return False
+            stable_since = self._candidate_since.get(rule.id, now)
             if now - stable_since < debounce_seconds:
-                return False
-            if now - last_fire < cooldown_seconds:
-                return False
+                return None
+            if self._last_branch.get(rule.id) == branch:
+                return None
+            if branch == "then" and now - self._last_fire.get(rule.id, 0) < cooldown_seconds:
+                return None
+            if branch == "else" and not rule.else_actions:
+                self._last_branch[rule.id] = branch
+                return None
 
-            self._armed_state[rule.id] = True
-            return True
+            self._last_branch[rule.id] = branch
+            return branch
 
-    def _current_should_fire(self, rule: LogicRule, state: dict[str, Any], now: float) -> bool:
+    def _current_branch_to_fire(self, rule: LogicRule, state: dict[str, Any], now: float) -> str | None:
         channel = str(rule.cause.get("channel") or "")
         threshold = int(rule.cause.get("threshold_ma", 1000))
         cooldown_seconds = max(0, int(rule.cause.get("cooldown_ms", 5000))) / 1000
         currents = dict(state.get("ina_current_map") or {})
         current = int(currents.get(channel, 0) or 0)
-        last_fire = self._last_fire.get(rule.id, 0)
-        return current >= threshold and now - last_fire >= cooldown_seconds
+        branch = "then" if current >= threshold else "else"
+        with self._lock:
+            if self._last_branch.get(rule.id) == branch:
+                return None
+            if branch == "then" and now - self._last_fire.get(rule.id, 0) < cooldown_seconds:
+                return None
+            if branch == "else" and not rule.else_actions:
+                self._last_branch[rule.id] = branch
+                return None
+            self._last_branch[rule.id] = branch
+            return branch
 
     def _timer_should_fire(self, rule: LogicRule, now: float) -> bool:
         seconds = max(0, float(rule.cause.get("seconds", 1)))
@@ -293,8 +333,9 @@ class LogicEngine:
             self._timer_started[rule.id] = now
             return True
 
-    def _fire(self, rule: LogicRule) -> None:
-        for action in rule.actions:
+    def _fire(self, rule: LogicRule, branch: str = "then") -> None:
+        actions = rule.actions if branch == "then" else rule.else_actions
+        for action in actions:
             self._run_action(action)
         if self._on_action:
             self._on_action()
