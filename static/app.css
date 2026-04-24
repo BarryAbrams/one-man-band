@@ -533,8 +533,7 @@ button:hover {
 }
 
 .animation-toolbar,
-.animation-inspector,
-.timeline-shell {
+.animation-inspector {
   padding: 16px;
   background: #f8f3ea;
   border: 1px solid rgba(78, 60, 33, 0.08);
@@ -581,6 +580,8 @@ button:hover {
   width: 100vw;
   max-height: 42vh;
   padding: 16px max(16px, calc((100vw - 1120px) / 2));
+  background: #f8f3ea;
+  border: 1px solid rgba(78, 60, 33, 0.08);
   border-right: 0;
   border-bottom: 0;
   border-left: 0;

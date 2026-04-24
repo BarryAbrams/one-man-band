@@ -446,12 +446,6 @@
                       </label>
                     </template>
                     <template x-if="selectedAnimationTrack().type !== 'audio'">
-                      <label class="field-label">
-                        Start ms
-                        <input type="number" min="0" x-model.number="animations.playhead_ms">
-                      </label>
-                    </template>
-                    <template x-if="selectedAnimationTrack().type !== 'audio'">
                       <button class="secondary" @click="addAnimationKeyframe()">Add Keyframe At Playhead</button>
                     </template>
                   </div>
@@ -592,63 +586,62 @@
                 </section>
               </template>
 
-              <div class="timeline-shell">
-                <div class="timeline-controls">
-                  <label class="servo-label" for="animation-playhead">
-                    Playhead <span x-text="formatTimerMs(animations.playhead_ms)"></span>
-                  </label>
-                  <input
-                    id="animation-playhead"
-                    class="servo-slider"
-                    type="range"
-                    min="0"
-                    :max="animations.form.duration_ms"
-                    step="10"
-                    x-model.number="animations.playhead_ms"
-                  >
-                </div>
-                <div class="timeline-ruler">
-                  <template x-for="tick in animationTicks()" :key="tick">
-                    <span :style="`left: ${animationTimePercent(tick)}%`" x-text="formatTimerMs(tick)"></span>
-                  </template>
-                </div>
-                <div class="timeline-track-list">
-                  <template x-if="!animations.form.timeline.tracks.length">
-                    <p class="tile-subtitle">Add a track to start building the timeline.</p>
-                  </template>
-                  <template x-for="track in animations.form.timeline.tracks" :key="track.id">
-                    <button
-                      class="timeline-track"
-                      :class="animations.selectedTrackId === track.id ? 'active' : ''"
-                      @click="animations.selectedTrackId = track.id"
-                    >
-                      <span class="timeline-track-label">
-                        <strong x-text="track.label"></strong>
-                        <small x-text="animationTrackSubtitle(track)"></small>
-                      </span>
-                      <span class="timeline-lane">
-                        <svg class="timeline-visual" viewBox="0 0 100 100" preserveAspectRatio="none" x-html="timelineVisual(track)"></svg>
-                        <span class="timeline-playhead" :style="`left: ${animationTimePercent(animations.playhead_ms)}%`"></span>
-                        <template x-for="(keyframe, keyIndex) in track.keyframes" :key="keyIndex">
-                          <span
-                            class="timeline-key"
-                            :class="`key-${track.type}`"
-                            :style="`left: ${animationTimePercent(keyframe.time_ms)}%; background: ${track.type === 'pixels' ? keyframe.color : ''}`"
-                            :title="`${track.label} @ ${formatTimerMs(keyframe.time_ms)}`"
-                          ></span>
-                        </template>
-                      </span>
-                    </button>
-                  </template>
-                </div>
-              </div>
-
               <template x-if="animations.message">
                 <p class="tile-subtitle panel-note" x-text="animations.message"></p>
               </template>
             </section>
           </div>
         </section>
+        <div class="timeline-shell" x-show="activeTab === 'animations'" x-cloak>
+          <div class="timeline-controls">
+            <label class="servo-label" for="animation-playhead">
+              Playhead <span x-text="formatTimerMs(animations.playhead_ms)"></span>
+            </label>
+            <input
+              id="animation-playhead"
+              class="servo-slider"
+              type="range"
+              min="0"
+              :max="animations.form.duration_ms"
+              step="10"
+              x-model.number="animations.playhead_ms"
+            >
+          </div>
+          <div class="timeline-ruler">
+            <template x-for="tick in animationTicks()" :key="tick">
+              <span :style="`left: ${animationTimePercent(tick)}%`" x-text="formatTimerMs(tick)"></span>
+            </template>
+          </div>
+          <div class="timeline-track-list">
+            <template x-if="!animations.form.timeline.tracks.length">
+              <p class="tile-subtitle">Add a track to start building the timeline.</p>
+            </template>
+            <template x-for="track in animations.form.timeline.tracks" :key="track.id">
+              <button
+                class="timeline-track"
+                :class="animations.selectedTrackId === track.id ? 'active' : ''"
+                @click="animations.selectedTrackId = track.id"
+              >
+                <span class="timeline-track-label">
+                  <strong x-text="track.label"></strong>
+                  <small x-text="animationTrackSubtitle(track)"></small>
+                </span>
+                <span class="timeline-lane">
+                  <svg class="timeline-visual" viewBox="0 0 100 100" preserveAspectRatio="none" x-html="timelineVisual(track)"></svg>
+                  <span class="timeline-playhead" :style="`left: ${animationTimePercent(animations.playhead_ms)}%`"></span>
+                  <template x-for="(keyframe, keyIndex) in track.keyframes" :key="keyIndex">
+                    <span
+                      class="timeline-key"
+                      :class="`key-${track.type}`"
+                      :style="`left: ${animationTimePercent(keyframe.time_ms)}%; background: ${track.type === 'pixels' ? keyframe.color : ''}`"
+                      :title="`${track.label} @ ${formatTimerMs(keyframe.time_ms)}`"
+                    ></span>
+                  </template>
+                </span>
+              </button>
+            </template>
+          </div>
+        </div>
       </section>
 
       <section x-show="activeTab === 'logic'" x-cloak class="tab-panel-stack">
