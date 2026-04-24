@@ -208,6 +208,7 @@ class LogicEngine:
         self._timer_start_seen: set[tuple[int, str, int]] = set()
         self._timer_end_seen: set[tuple[int, str, int]] = set()
         self._timer_position_seen: set[tuple[int, str, int, int | None]] = set()
+        self._audio_playlist_positions: dict[tuple[int, str, int], int] = {}
         self._boot_ran = False
 
     def metadata(self) -> dict[str, Any]:
@@ -215,10 +216,7 @@ class LogicEngine:
             "logic_cause_types": [
                 "boot",
                 "gpio",
-                "current_above",
-                "timer_started",
-                "timer_ended",
-                "timer_position",
+                "timer",
             ],
             "logic_action_types": [
                 "audio_play",
@@ -232,6 +230,28 @@ class LogicEngine:
 
     def rules_payload(self) -> dict[str, Any]:
         return {"rules": [rule.to_payload() for rule in self._store.list_rules()]}
+
+    def timers_payload(self) -> list[dict[str, Any]]:
+        now = time.monotonic()
+        self._update_timers(now)
+        with self._lock:
+            timers = []
+            for timer in sorted(self._timers.values(), key=lambda item: item.name.lower()):
+                elapsed = max(0.0, now - timer.started_at)
+                remaining = max(0.0, timer.duration_seconds - elapsed)
+                duration_ms = int(round(timer.duration_seconds * 1000))
+                remaining_ms = int(round(remaining * 1000))
+                progress = 1.0 if timer.duration_seconds <= 0 else min(1.0, elapsed / timer.duration_seconds)
+                timers.append(
+                    {
+                        "name": timer.name,
+                        "duration_ms": duration_ms,
+                        "remaining_ms": remaining_ms,
+                        "progress": progress,
+                        "ended": timer.ended,
+                    }
+                )
+            return timers
 
     def save_rule(self, payload: dict[str, Any]) -> LogicRule:
         return self._store.upsert_rule(payload)
@@ -300,9 +320,7 @@ class LogicEngine:
         cause_type = rule.cause.get("type")
         if cause_type == "gpio":
             return self._gpio_branch_to_fire(rule, gpio, now)
-        if cause_type == "current_above":
-            return self._current_branch_to_fire(rule, state, now)
-        if cause_type in {"timer_started", "timer_ended", "timer_position"}:
+        if cause_type in {"timer", "timer_started", "timer_ended", "timer_position"}:
             return "then" if self._timer_event_should_fire(rule, now) else None
         return None
 
@@ -334,24 +352,6 @@ class LogicEngine:
             self._last_branch[rule.id] = branch
             return branch
 
-    def _current_branch_to_fire(self, rule: LogicRule, state: dict[str, Any], now: float) -> str | None:
-        channel = str(rule.cause.get("channel") or "")
-        threshold = int(rule.cause.get("threshold_ma", 1000))
-        cooldown_seconds = max(0, int(rule.cause.get("cooldown_ms", 5000))) / 1000
-        currents = dict(state.get("ina_current_map") or {})
-        current = int(currents.get(channel, 0) or 0)
-        branch = "then" if current >= threshold else "else"
-        with self._lock:
-            if self._last_branch.get(rule.id) == branch:
-                return None
-            if branch == "then" and now - self._last_fire.get(rule.id, 0) < cooldown_seconds:
-                return None
-            if branch == "else" and not rule.else_actions:
-                self._last_branch[rule.id] = branch
-                return None
-            self._last_branch[rule.id] = branch
-            return branch
-
     def _timer_event_should_fire(self, rule: LogicRule, now: float) -> bool:
         timer_name = self._timer_name(rule.cause.get("timer_name") or "")
         if not timer_name:
@@ -362,22 +362,22 @@ class LogicEngine:
             if timer is None:
                 return False
 
-            cause_type = rule.cause.get("type")
-            if cause_type == "timer_started":
+            timer_event = self._timer_event(rule.cause)
+            if timer_event == "started":
                 key = (rule.id, timer.name, timer.generation)
                 if key in self._timer_start_seen:
                     return False
                 self._timer_start_seen.add(key)
                 return True
 
-            if cause_type == "timer_ended":
+            if timer_event == "ended":
                 key = (rule.id, timer.name, timer.generation)
                 if not timer.ended or key in self._timer_end_seen:
                     return False
                 self._timer_end_seen.add(key)
                 return True
 
-            if cause_type == "timer_position":
+            if timer_event == "position":
                 percent = self._optional_percent(rule.cause.get("percent"))
                 key = (rule.id, timer.name, timer.generation, percent)
                 if key in self._timer_position_seen:
@@ -420,15 +420,15 @@ class LogicEngine:
 
     def _fire(self, rule: LogicRule, branch: str = "then") -> None:
         actions = rule.actions if branch == "then" else rule.else_actions
-        for action in actions:
-            self._run_action(action)
+        for index, action in enumerate(actions):
+            self._run_action(action, rule.id, branch, index)
         if self._on_action:
             self._on_action()
 
-    def _run_action(self, action: dict[str, Any]) -> None:
+    def _run_action(self, action: dict[str, Any], rule_id: int, branch: str, index: int) -> None:
         action_type = action.get("type")
         if action_type == "audio_play":
-            filename = str(action.get("filename") or "").strip()
+            filename = self._audio_filename(action, rule_id, branch, index)
             if filename:
                 self._audio_manager.play(filename, str(action.get("speaker") or "both"))
         elif action_type == "timer_set":
@@ -490,3 +490,36 @@ class LogicEngine:
         if value in (None, ""):
             return None
         return max(0, min(100, int(value)))
+
+    def _timer_event(self, cause: dict[str, Any]) -> str:
+        event = str(cause.get("timer_event") or "").strip().lower()
+        if event in {"started", "ended", "position"}:
+            return event
+        legacy_type = str(cause.get("type") or "")
+        if legacy_type == "timer_started":
+            return "started"
+        if legacy_type == "timer_ended":
+            return "ended"
+        if legacy_type == "timer_position":
+            return "position"
+        return "ended"
+
+    def _audio_filename(
+        self, action: dict[str, Any], rule_id: int, branch: str, index: int
+    ) -> str:
+        mode = str(action.get("mode") or "single")
+        if mode != "playlist":
+            return str(action.get("filename") or "").strip()
+
+        playlist = [
+            str(filename).strip()
+            for filename in action.get("playlist", [])
+            if str(filename).strip()
+        ]
+        if not playlist:
+            return ""
+
+        key = (rule_id, branch, index)
+        position = self._audio_playlist_positions.get(key, 0) % len(playlist)
+        self._audio_playlist_positions[key] = (position + 1) % len(playlist)
+        return playlist[position]

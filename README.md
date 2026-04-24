@@ -36,7 +36,7 @@ Then open `http://localhost:5000`.
 
 ## Next good additions
 
-- Audio transport and playlist control
+- Audio transport controls
 - Named presets/scenes
 - RP2040 command history and safety interlocks
 - Physical status page for amps, DAC, and current playback

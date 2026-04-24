@@ -501,12 +501,88 @@ button:hover {
   margin: 0 0 12px;
 }
 
+.track-picker {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
 .logic-actions {
   margin-top: 2px;
 }
 
 .danger {
   color: var(--error);
+}
+
+.timer-toast-stack {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 20;
+  display: grid;
+  gap: 10px;
+  justify-items: end;
+  pointer-events: none;
+}
+
+.timer-toast {
+  min-width: 150px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid rgba(31, 107, 90, 0.18);
+  border-radius: 18px;
+  background: rgba(255, 252, 246, 0.96);
+  box-shadow: var(--shadow);
+  pointer-events: auto;
+}
+
+.timer-icon {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.timer-icon::before,
+.timer-icon::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 2px;
+  background: var(--accent);
+  transform-origin: center bottom;
+}
+
+.timer-icon::before {
+  height: 6px;
+  transform: translate(-50%, -100%);
+}
+
+.timer-icon::after {
+  height: 5px;
+  transform: translate(-50%, -100%) rotate(90deg);
+}
+
+.timer-toast-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.timer-toast-copy strong {
+  font-size: 0.9rem;
+  line-height: 1.1;
+}
+
+.timer-toast-copy span {
+  color: var(--muted);
+  font-size: 0.82rem;
 }
 
 .servo-card.active {

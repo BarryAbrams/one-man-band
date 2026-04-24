@@ -417,10 +417,7 @@
                     <select id="logic-cause-type" x-model="logic.form.cause.type" @change="logicCauseChanged()">
                       <option value="boot">Script boots</option>
                       <option value="gpio">GPIO changes</option>
-                      <option value="timer_started">Timer started</option>
-                      <option value="timer_ended">Timer ended</option>
-                      <option value="timer_position">Timer position</option>
-                      <option value="current_above">Too many amps are drawn</option>
+                      <option value="timer">Timer countdown</option>
                     </select>
                   </label>
                   <template x-if="logic.form.cause.type === 'gpio'">
@@ -442,36 +439,30 @@
                       </select>
                     </label>
                   </template>
-                  <template x-if="isTimerCause(logic.form.cause.type)">
+                  <template x-if="logic.form.cause.type === 'timer'">
                     <label class="field-label">
                       Timer Name
                       <input type="text" pattern="[A-Za-z0-9]+" x-model="logic.form.cause.timer_name" @input="logic.form.cause.timer_name = sanitizeTimerName(logic.form.cause.timer_name)">
                     </label>
                   </template>
-                  <template x-if="logic.form.cause.type === 'timer_position'">
+                  <template x-if="logic.form.cause.type === 'timer'">
+                    <label class="field-label">
+                      Event
+                      <select x-model="logic.form.cause.timer_event">
+                        <option value="started">Started</option>
+                        <option value="ended">Ended</option>
+                        <option value="position">Position</option>
+                      </select>
+                    </label>
+                  </template>
+                  <template x-if="logic.form.cause.type === 'timer' && logic.form.cause.timer_event === 'position'">
                     <label class="field-label">
                       Position %
                       <input type="number" min="0" max="100" placeholder="Any" x-model="logic.form.cause.percent">
                     </label>
                   </template>
-                  <template x-if="logic.form.cause.type === 'current_above'">
-                    <label class="field-label">
-                      Channel
-                      <select x-model="logic.form.cause.channel">
-                        <template x-for="channel in Object.keys(meta.ina_channels || {})" :key="channel">
-                          <option :value="channel" x-text="channel"></option>
-                        </template>
-                      </select>
-                    </label>
-                  </template>
-                  <template x-if="logic.form.cause.type === 'current_above'">
-                    <label class="field-label">
-                      Threshold mA
-                      <input type="number" min="0" x-model.number="logic.form.cause.threshold_ma">
-                    </label>
-                  </template>
                 </div>
-                <template x-if="logic.form.cause.type === 'gpio' || logic.form.cause.type === 'current_above'">
+                <template x-if="logic.form.cause.type === 'gpio'">
                   <div class="logic-row">
                     <template x-if="logic.form.cause.type === 'gpio'">
                       <label class="field-label">
@@ -516,12 +507,10 @@
                     <template x-if="action.type === 'audio_play'">
                       <div class="logic-row">
                         <label class="field-label">
-                          File
-                          <select x-model="action.filename">
-                            <option value="">Choose a track</option>
-                            <template x-for="track in audio.tracks" :key="track.name">
-                              <option :value="track.name" x-text="track.name"></option>
-                            </template>
+                          Mode
+                          <select x-model="action.mode">
+                            <option value="single">Single track</option>
+                            <option value="playlist">Rotating list</option>
                           </select>
                         </label>
                         <label class="field-label">
@@ -532,6 +521,29 @@
                             <option value="left">Left</option>
                           </select>
                         </label>
+                      </div>
+                    </template>
+                    <template x-if="action.type === 'audio_play' && action.mode !== 'playlist'">
+                      <div class="logic-row">
+                        <label class="field-label">
+                          File
+                          <select x-model="action.filename">
+                            <option value="">Choose a track</option>
+                            <template x-for="track in audio.tracks" :key="track.name">
+                              <option :value="track.name" x-text="track.name"></option>
+                            </template>
+                          </select>
+                        </label>
+                      </div>
+                    </template>
+                    <template x-if="action.type === 'audio_play' && action.mode === 'playlist'">
+                      <div class="track-picker">
+                        <template x-for="track in audio.tracks" :key="track.name">
+                          <label class="check-label">
+                            <input type="checkbox" :checked="action.playlist.includes(track.name)" @change="toggleAudioPlaylistTrack(action, track.name)">
+                            <span x-text="track.name"></span>
+                          </label>
+                        </template>
                       </div>
                     </template>
 
@@ -640,7 +652,7 @@
                 </template>
               </div>
 
-              <div class="logic-block">
+              <div class="logic-block" x-show="supportsElse(logic.form.cause.type)" x-cloak>
                 <div class="panel-header compact-header">
                   <span class="logic-kicker">Else</span>
                   <button class="secondary" @click="addLogicAction('else_actions')">Add Else Action</button>
@@ -672,12 +684,10 @@
                     <template x-if="action.type === 'audio_play'">
                       <div class="logic-row">
                         <label class="field-label">
-                          File
-                          <select x-model="action.filename">
-                            <option value="">Choose a track</option>
-                            <template x-for="track in audio.tracks" :key="track.name">
-                              <option :value="track.name" x-text="track.name"></option>
-                            </template>
+                          Mode
+                          <select x-model="action.mode">
+                            <option value="single">Single track</option>
+                            <option value="playlist">Rotating list</option>
                           </select>
                         </label>
                         <label class="field-label">
@@ -688,6 +698,29 @@
                             <option value="left">Left</option>
                           </select>
                         </label>
+                      </div>
+                    </template>
+                    <template x-if="action.type === 'audio_play' && action.mode !== 'playlist'">
+                      <div class="logic-row">
+                        <label class="field-label">
+                          File
+                          <select x-model="action.filename">
+                            <option value="">Choose a track</option>
+                            <template x-for="track in audio.tracks" :key="track.name">
+                              <option :value="track.name" x-text="track.name"></option>
+                            </template>
+                          </select>
+                        </label>
+                      </div>
+                    </template>
+                    <template x-if="action.type === 'audio_play' && action.mode === 'playlist'">
+                      <div class="track-picker">
+                        <template x-for="track in audio.tracks" :key="track.name">
+                          <label class="check-label">
+                            <input type="checkbox" :checked="action.playlist.includes(track.name)" @change="toggleAudioPlaylistTrack(action, track.name)">
+                            <span x-text="track.name"></span>
+                          </label>
+                        </template>
                       </div>
                     </template>
 
@@ -809,6 +842,17 @@
         </section>
       </section>
 
+      <div class="timer-toast-stack" aria-live="polite">
+        <template x-for="timer in activeLogicTimers()" :key="timer.name">
+          <div class="timer-toast" :title="timerTooltip(timer)">
+            <span class="timer-icon" aria-hidden="true"></span>
+            <span class="timer-toast-copy">
+              <strong x-text="timer.name"></strong>
+              <span x-text="formatTimerRemaining(timer)"></span>
+            </span>
+          </div>
+        </template>
+      </div>
     </main>
 
     <script>
@@ -856,6 +900,7 @@
             gpio_override_map: {},
             gpio_error: "",
             audio_status: {},
+            logic_timers: [],
           },
           audio: {
             tracks: [],
@@ -952,18 +997,11 @@
 
           defaultCause(type = "gpio") {
             const firstInput = (this.meta.gpio_inputs || ["1"])[0];
-            const firstIna = Object.keys(this.meta.ina_channels || { "12V_C": {} })[0] || "12V_C";
             if (type === "boot") {
               return { type: "boot" };
             }
-            if (type === "timer_started" || type === "timer_ended") {
-              return { type, timer_name: "Timer1" };
-            }
-            if (type === "timer_position") {
-              return { type, timer_name: "Timer1", percent: "" };
-            }
-            if (type === "current_above") {
-              return { type: "current_above", channel: firstIna, threshold_ma: 1000, cooldown_ms: 5000 };
+            if (type === "timer" || this.isTimerCause(type)) {
+              return { type: "timer", timer_name: "Timer1", timer_event: this.timerEventFromType(type), percent: "" };
             }
             return { type: "gpio", input: firstInput, state: false, debounce_ms: 50, cooldown_ms: 1000 };
           },
@@ -972,7 +1010,7 @@
             const firstSolenoid = (this.meta.solenoids || ["P0"])[0];
             const firstServo = (this.meta.servos || [0])[0];
             if (type === "audio_play") {
-              return { type, filename: "", speaker: "both" };
+              return { type, mode: "single", filename: "", playlist: [], speaker: "both" };
             }
             if (type === "timer_set") {
               return { type, timer_name: "Timer1", duration_ms: 1000 };
@@ -1024,13 +1062,14 @@
           },
 
           editLogicRule(rule) {
+            const normalizedCause = this.normalizeLogicCause(rule.cause || {});
             this.logic.selectedId = rule.id;
             this.logic.message = "";
             this.logic.form = {
               id: rule.id,
               name: rule.name,
               enabled: rule.enabled,
-              cause: { ...this.defaultCause(rule.cause?.type || "gpio"), ...(rule.cause || {}) },
+              cause: { ...this.defaultCause(normalizedCause.type || "gpio"), ...normalizedCause },
               actions: (rule.actions || []).map((action) => this.normalizeLogicAction(action)),
               else_actions: (rule.else_actions || []).map((action) => this.normalizeLogicAction(action)),
             };
@@ -1041,6 +1080,10 @@
 
           normalizeLogicAction(action) {
             const normalized = { ...this.defaultAction(action.type || "solenoid_pulse"), ...action };
+            if (normalized.type === "audio_play") {
+              normalized.mode = normalized.mode || "single";
+              normalized.playlist = Array.isArray(normalized.playlist) ? normalized.playlist : [];
+            }
             if (normalized.type === "timer_set") {
               normalized.timer_name = this.sanitizeTimerName(normalized.timer_name || "Timer1");
             }
@@ -1052,9 +1095,26 @@
             return normalized;
           },
 
+          normalizeLogicCause(cause) {
+            if (cause.type === "current_above") {
+              return this.defaultCause("gpio");
+            }
+            if (this.isTimerCause(cause.type)) {
+              return {
+                ...cause,
+                type: "timer",
+                timer_event: this.timerEventFromType(cause.type),
+              };
+            }
+            return cause;
+          },
+
           logicCauseChanged() {
             const type = this.logic.form.cause.type;
             this.logic.form.cause = this.defaultCause(type);
+            if (!this.supportsElse(type)) {
+              this.logic.form.else_actions = [];
+            }
           },
 
           logicActionChanged(action) {
@@ -1080,9 +1140,25 @@
             action.rails = [...action.rails, rail];
           },
 
+          toggleAudioPlaylistTrack(action, filename) {
+            const playlist = Array.isArray(action.playlist) ? action.playlist : [];
+            if (playlist.includes(filename)) {
+              action.playlist = playlist.filter((item) => item !== filename);
+              return;
+            }
+            action.playlist = [...playlist, filename];
+          },
+
           serializeLogicActions(actions) {
             return actions.map((action) => {
               const payload = { ...action };
+              if (payload.type === "audio_play") {
+                payload.mode = payload.mode || "single";
+                payload.playlist = Array.isArray(payload.playlist) ? payload.playlist : [];
+                if (payload.mode !== "playlist") {
+                  payload.playlist = [];
+                }
+              }
               if (payload.type === "timer_set") {
                 payload.timer_name = this.sanitizeTimerName(payload.timer_name || "Timer1");
               }
@@ -1107,15 +1183,18 @@
             if (cause.type === "gpio") {
               cause.state = this.logicBool(cause.state);
             }
-            if (this.isTimerCause(cause.type)) {
+            if (cause.type === "timer") {
               cause.timer_name = this.sanitizeTimerName(cause.timer_name || "Timer1");
+              cause.timer_event = cause.timer_event || "ended";
             }
-            if (cause.type === "timer_position") {
+            if (cause.type === "timer" && cause.timer_event === "position") {
               if (cause.percent === "" || cause.percent === null || cause.percent === undefined) {
                 delete cause.percent;
               } else {
                 cause.percent = Math.max(0, Math.min(100, Number(cause.percent)));
               }
+            } else {
+              delete cause.percent;
             }
             return {
               id: this.logic.form.id,
@@ -1123,7 +1202,7 @@
               enabled: this.logic.form.enabled,
               cause,
               actions: this.serializeLogicActions(this.logic.form.actions),
-              else_actions: this.serializeLogicActions(this.logic.form.else_actions || []),
+              else_actions: this.supportsElse(cause.type) ? this.serializeLogicActions(this.logic.form.else_actions || []) : [],
             };
           },
 
@@ -1172,25 +1251,23 @@
             const elseCount = (rule.else_actions || []).length;
             const suffix = elseCount ? `, else ${elseCount} action${elseCount === 1 ? "" : "s"}` : "";
             if (cause.type === "boot") {
-              return `On boot, ${actionCount} action${actionCount === 1 ? "" : "s"}${suffix}`;
+              return `On boot, ${actionCount} action${actionCount === 1 ? "" : "s"}`;
             }
             if (cause.type === "gpio") {
               return `Input ${cause.input} ${this.logicBool(cause.state) ? "HIGH" : "LOW"}, ${actionCount} action${actionCount === 1 ? "" : "s"}${suffix}`;
             }
-            if (cause.type === "timer_started") {
-              return `${cause.timer_name || "Timer"} started, ${actionCount} action${actionCount === 1 ? "" : "s"}${suffix}`;
+            if (cause.type === "timer" || this.isTimerCause(cause.type)) {
+              const timerCause = this.normalizeLogicCause(cause);
+              if (timerCause.timer_event === "started") {
+                return `${timerCause.timer_name || "Timer"} started, ${actionCount} action${actionCount === 1 ? "" : "s"}`;
+              }
+              if (timerCause.timer_event === "position") {
+                const position = timerCause.percent === undefined ? "any position" : `${timerCause.percent}%`;
+                return `${timerCause.timer_name || "Timer"} at ${position}, ${actionCount} action${actionCount === 1 ? "" : "s"}`;
+              }
+              return `${timerCause.timer_name || "Timer"} ended, ${actionCount} action${actionCount === 1 ? "" : "s"}`;
             }
-            if (cause.type === "timer_ended") {
-              return `${cause.timer_name || "Timer"} ended, ${actionCount} action${actionCount === 1 ? "" : "s"}${suffix}`;
-            }
-            if (cause.type === "timer_position") {
-              const position = cause.percent === undefined ? "any position" : `${cause.percent}%`;
-              return `${cause.timer_name || "Timer"} at ${position}, ${actionCount} action${actionCount === 1 ? "" : "s"}${suffix}`;
-            }
-            if (cause.type === "current_above") {
-              return `${cause.channel} above ${cause.threshold_ma || 0} mA, ${actionCount} action${actionCount === 1 ? "" : "s"}${suffix}`;
-            }
-            return `${actionCount} action${actionCount === 1 ? "" : "s"}${suffix}`;
+            return `${actionCount} action${actionCount === 1 ? "" : "s"}`;
           },
 
           logicBool(value) {
@@ -1204,8 +1281,45 @@
             return ["timer_started", "timer_ended", "timer_position"].includes(type);
           },
 
+          timerEventFromType(type) {
+            if (type === "timer_started") {
+              return "started";
+            }
+            if (type === "timer_position") {
+              return "position";
+            }
+            return "ended";
+          },
+
+          supportsElse(type) {
+            return type === "gpio";
+          },
+
           sanitizeTimerName(value) {
             return String(value || "").replace(/[^A-Za-z0-9]/g, "");
+          },
+
+          activeLogicTimers() {
+            return (this.state.logic_timers || []).filter((timer) => !timer.ended);
+          },
+
+          formatTimerMs(value) {
+            const ms = Math.max(0, Number(value) || 0);
+            const totalSeconds = Math.ceil(ms / 1000);
+            const minutes = Math.floor(totalSeconds / 60);
+            const seconds = totalSeconds % 60;
+            if (minutes > 0) {
+              return `${minutes}:${String(seconds).padStart(2, "0")}`;
+            }
+            return `${seconds}s`;
+          },
+
+          formatTimerRemaining(timer) {
+            return `${this.formatTimerMs(timer.remaining_ms)} left`;
+          },
+
+          timerTooltip(timer) {
+            return `${timer.name}: ${this.formatTimerMs(timer.remaining_ms)} left of ${this.formatTimerMs(timer.duration_ms)}`;
           },
 
           syncServoDrafts(payload) {
