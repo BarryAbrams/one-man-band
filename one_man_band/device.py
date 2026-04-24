@@ -72,12 +72,12 @@ INA_CHANNELS: Final[dict[str, dict[str, object]]] = {
 }
 
 GPIO_INPUTS: Final[dict[str, int]] = {
-    "1": 17,
-    "2": 27,
-    "3": 22,
-    "4": 5,
-    "5": 6,
-    "6": 13,
+    "1": 13,
+    "2": 6,
+    "3": 5,
+    "4": 22,
+    "5": 27,
+    "6": 17,
 }
 
 SERVO_CHANNELS: Final[tuple[int, ...]] = tuple(range(8))
@@ -154,7 +154,7 @@ class DeviceController:
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._mock_mode = os.environ.get("OMB_MOCK_HARDWARE", "0") == "1"
-        self._gpio_mode = os.environ.get("OMB_GPIO_PULL", "off").strip().lower()
+        self._gpio_mode = os.environ.get("OMB_GPIO_PULL", "up").strip().lower()
         self._gpio_ready = False
         self._gpio_error = ""
         self._servo_value_cache: dict[int, int] = {}
