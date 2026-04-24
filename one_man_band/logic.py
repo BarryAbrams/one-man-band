@@ -43,6 +43,18 @@ class CountdownTimer:
     ended: bool = False
 
 
+@dataclass(slots=True)
+class ActionEvent:
+    id: int
+    type: str
+    label: str
+    detail: str
+    created_at: float
+
+    def to_payload(self) -> dict[str, Any]:
+        return asdict(self)
+
+
 class LogicStore:
     def __init__(self, path: Path) -> None:
         self._path = path
@@ -209,6 +221,9 @@ class LogicEngine:
         self._timer_end_seen: set[tuple[int, str, int]] = set()
         self._timer_position_seen: set[tuple[int, str, int, int | None]] = set()
         self._audio_playlist_positions: dict[tuple[int, str, int], int] = {}
+        self._running_animations: set[str] = set()
+        self._action_event_id = 0
+        self._action_events: list[ActionEvent] = []
         self._boot_ran = False
 
     def metadata(self) -> dict[str, Any]:
@@ -220,6 +235,8 @@ class LogicEngine:
             ],
             "logic_action_types": [
                 "audio_play",
+                "animation_play",
+                "animation_stop",
                 "timer_set",
                 "solenoid_set",
                 "solenoid_pulse",
@@ -252,6 +269,14 @@ class LogicEngine:
                     }
                 )
             return timers
+
+    def action_events_payload(self) -> list[dict[str, Any]]:
+        cutoff = time.monotonic() - 10
+        with self._lock:
+            self._action_events = [
+                event for event in self._action_events if event.created_at >= cutoff
+            ]
+            return [event.to_payload() for event in self._action_events]
 
     def save_rule(self, payload: dict[str, Any]) -> LogicRule:
         return self._store.upsert_rule(payload)
@@ -431,15 +456,39 @@ class LogicEngine:
             filename = self._audio_filename(action, rule_id, branch, index)
             if filename:
                 self._audio_manager.play(filename, str(action.get("speaker") or "both"))
+                self._record_action_event("audio", "Audio", filename)
+        elif action_type == "animation_play":
+            name = self._animation_name(action.get("animation_name") or "")
+            if name:
+                interrupt = self._bool(action.get("interrupt", False))
+                with self._lock:
+                    if interrupt:
+                        self._running_animations.clear()
+                    self._running_animations.add(name)
+                detail = f"{name} (interrupting)" if interrupt else name
+                self._record_action_event("animation", "Animation started", detail)
+        elif action_type == "animation_stop":
+            name = self._animation_name(action.get("animation_name") or "")
+            with self._lock:
+                if name:
+                    self._running_animations.discard(name)
+                    detail = name
+                else:
+                    self._running_animations.clear()
+                    detail = "All animations"
+            self._record_action_event("animation", "Animation stopped", detail)
         elif action_type == "timer_set":
             self._set_timer(
                 str(action.get("timer_name") or ""),
                 int(action.get("duration_ms", 1000)),
             )
+            self._record_action_event("timer", "Timer", str(action.get("timer_name") or ""))
         elif action_type == "solenoid_set":
             self._controller.set_solenoid(
                 str(action.get("name") or ""), self._bool(action.get("enabled", True))
             )
+            state = "HIGH" if self._bool(action.get("enabled", True)) else "LOW"
+            self._record_action_event("solenoid", "Solenoid", f"{action.get('name')} {state}")
         elif action_type == "solenoid_pulse":
             name = str(action.get("name") or "")
             duration = max(0, int(action.get("duration_ms", 1000))) / 1000
@@ -447,11 +496,13 @@ class LogicEngine:
             timer = threading.Timer(duration, self._finish_solenoid_pulse, args=(name,))
             timer.daemon = True
             timer.start()
+            self._record_action_event("solenoid", "Solenoid pulse", f"{name} {int(duration * 1000)} ms")
         elif action_type == "servo_set":
             channel = int(action.get("channel", 0))
             if self._bool(action.get("enable", True)):
                 self._controller.set_servo_enabled(channel, True)
             self._controller.set_servo_value(channel, int(action.get("value", 127)))
+            self._record_action_event("servo", "Servo", f"{channel} -> {int(action.get('value', 127))}")
         elif action_type == "pixels_animate":
             rails = action.get("rails") or []
             rail_mask = 0
@@ -466,6 +517,7 @@ class LogicEngine:
                 duration_ms=int(action.get("duration_ms", 1000)),
                 animation_id=int(action.get("animation_id", 0)),
             )
+            self._record_action_event("pixels", "Neopixels", f"Rails {', '.join(str(rail) for rail in rails)}")
 
     def _finish_solenoid_pulse(self, name: str) -> None:
         self._controller.set_solenoid(name, False)
@@ -485,6 +537,9 @@ class LogicEngine:
     def _timer_name(self, value: Any) -> str:
         name = str(value or "").strip()
         return name if TIMER_NAME_RE.match(name) else ""
+
+    def _animation_name(self, value: Any) -> str:
+        return str(value or "").strip()
 
     def _optional_percent(self, value: Any) -> int | None:
         if value in (None, ""):
@@ -523,3 +578,17 @@ class LogicEngine:
         position = self._audio_playlist_positions.get(key, 0) % len(playlist)
         self._audio_playlist_positions[key] = (position + 1) % len(playlist)
         return playlist[position]
+
+    def _record_action_event(self, event_type: str, label: str, detail: str) -> None:
+        with self._lock:
+            self._action_event_id += 1
+            self._action_events.append(
+                ActionEvent(
+                    id=self._action_event_id,
+                    type=event_type,
+                    label=label,
+                    detail=detail,
+                    created_at=time.monotonic(),
+                )
+            )
+            self._action_events = self._action_events[-30:]

@@ -38,6 +38,7 @@ def _combined_state(process_logic: bool = False) -> dict[str, object]:
         **device_state,
         "audio_status": audio_manager.status().to_payload(),
         "logic_timers": logic_engine.timers_payload(),
+        "logic_action_events": logic_engine.action_events_payload(),
     }
 
 

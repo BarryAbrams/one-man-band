@@ -462,6 +462,9 @@
                     </label>
                   </template>
                 </div>
+                <template x-if="timerCauseWarning()">
+                  <p class="warning-text panel-note" x-text="timerCauseWarning()"></p>
+                </template>
                 <template x-if="logic.form.cause.type === 'gpio'">
                   <div class="logic-row">
                     <template x-if="logic.form.cause.type === 'gpio'">
@@ -494,6 +497,8 @@
                           Action
                           <select x-model="action.type" @change="logicActionChanged(action)">
                             <option value="audio_play">Play audio</option>
+                            <option value="animation_play">Play animation</option>
+                            <option value="animation_stop">Stop animation</option>
                             <option value="timer_set">Set timer</option>
                             <option value="solenoid_pulse">Pulse relay</option>
                             <option value="solenoid_set">Set relay</option>
@@ -544,6 +549,28 @@
                             <span x-text="track.name"></span>
                           </label>
                         </template>
+                      </div>
+                    </template>
+
+                    <template x-if="action.type === 'animation_play'">
+                      <div class="logic-row">
+                        <label class="field-label">
+                          Animation Name
+                          <input type="text" x-model="action.animation_name">
+                        </label>
+                        <label class="check-label">
+                          <input type="checkbox" x-model="action.interrupt">
+                          Interrupt others
+                        </label>
+                      </div>
+                    </template>
+
+                    <template x-if="action.type === 'animation_stop'">
+                      <div class="logic-row">
+                        <label class="field-label">
+                          Animation Name
+                          <input type="text" placeholder="All" x-model="action.animation_name">
+                        </label>
                       </div>
                     </template>
 
@@ -671,6 +698,8 @@
                           Action
                           <select x-model="action.type" @change="logicActionChanged(action)">
                             <option value="audio_play">Play audio</option>
+                            <option value="animation_play">Play animation</option>
+                            <option value="animation_stop">Stop animation</option>
                             <option value="timer_set">Set timer</option>
                             <option value="solenoid_pulse">Pulse relay</option>
                             <option value="solenoid_set">Set relay</option>
@@ -721,6 +750,28 @@
                             <span x-text="track.name"></span>
                           </label>
                         </template>
+                      </div>
+                    </template>
+
+                    <template x-if="action.type === 'animation_play'">
+                      <div class="logic-row">
+                        <label class="field-label">
+                          Animation Name
+                          <input type="text" x-model="action.animation_name">
+                        </label>
+                        <label class="check-label">
+                          <input type="checkbox" x-model="action.interrupt">
+                          Interrupt others
+                        </label>
+                      </div>
+                    </template>
+
+                    <template x-if="action.type === 'animation_stop'">
+                      <div class="logic-row">
+                        <label class="field-label">
+                          Animation Name
+                          <input type="text" placeholder="All" x-model="action.animation_name">
+                        </label>
                       </div>
                     </template>
 
@@ -842,16 +893,26 @@
         </section>
       </section>
 
-      <div class="timer-toast-stack" aria-live="polite">
-        <template x-for="timer in activeLogicTimers()" :key="timer.name">
-          <div class="timer-toast" :title="timerTooltip(timer)">
-            <span class="timer-icon" aria-hidden="true"></span>
-            <span class="timer-toast-copy">
-              <strong x-text="timer.name"></strong>
-              <span x-text="formatTimerRemaining(timer)"></span>
-            </span>
-          </div>
-        </template>
+      <div class="runtime-toast-stack" aria-live="polite">
+        <div class="action-toast-stack">
+          <template x-for="toast in actionToasts" :key="toast.id">
+            <div class="action-toast" :class="`action-${toast.type}`">
+              <span class="action-toast-label" x-text="toast.label"></span>
+              <span class="action-toast-detail" x-text="toast.detail"></span>
+            </div>
+          </template>
+        </div>
+        <div class="timer-toast-stack">
+          <template x-for="timer in activeLogicTimers()" :key="timer.name">
+            <div class="timer-toast" :title="timerTooltip(timer)">
+              <span class="timer-icon" aria-hidden="true"></span>
+              <span class="timer-toast-copy">
+                <strong x-text="timer.name"></strong>
+                <span x-text="formatTimerRemaining(timer)"></span>
+              </span>
+            </div>
+          </template>
+        </div>
       </div>
     </main>
 
@@ -901,6 +962,7 @@
             gpio_error: "",
             audio_status: {},
             logic_timers: [],
+            logic_action_events: [],
           },
           audio: {
             tracks: [],
@@ -943,6 +1005,8 @@
               else_actions: [],
             },
           },
+          actionToasts: [],
+          seenActionEventIds: [],
           uploadFile: null,
           uploading: false,
 
@@ -977,6 +1041,7 @@
             });
             this.socket.on("state:update", (payload) => {
               this.state = payload;
+              this.syncActionToasts(payload.logic_action_events || []);
               this.syncServoDrafts(payload);
               if (payload.audio_status) {
                 this.audio.status = payload.audio_status;
@@ -1011,6 +1076,12 @@
             const firstServo = (this.meta.servos || [0])[0];
             if (type === "audio_play") {
               return { type, mode: "single", filename: "", playlist: [], speaker: "both" };
+            }
+            if (type === "animation_play") {
+              return { type, animation_name: "Animation1", interrupt: false };
+            }
+            if (type === "animation_stop") {
+              return { type, animation_name: "" };
             }
             if (type === "timer_set") {
               return { type, timer_name: "Timer1", duration_ms: 1000 };
@@ -1159,6 +1230,13 @@
                   payload.playlist = [];
                 }
               }
+              if (payload.type === "animation_play") {
+                payload.animation_name = String(payload.animation_name || "Animation1").trim();
+                payload.interrupt = this.logicBool(payload.interrupt);
+              }
+              if (payload.type === "animation_stop") {
+                payload.animation_name = String(payload.animation_name || "").trim();
+              }
               if (payload.type === "timer_set") {
                 payload.timer_name = this.sanitizeTimerName(payload.timer_name || "Timer1");
               }
@@ -1297,6 +1375,52 @@
 
           sanitizeTimerName(value) {
             return String(value || "").replace(/[^A-Za-z0-9]/g, "");
+          },
+
+          usedTimerNames() {
+            const names = new Set();
+            const collect = (actions) => {
+              (actions || []).forEach((action) => {
+                if (action.type === "timer_set") {
+                  const name = this.sanitizeTimerName(action.timer_name || "");
+                  if (name) {
+                    names.add(name);
+                  }
+                }
+              });
+            };
+            (this.logic.rules || []).forEach((rule) => {
+              collect(rule.actions);
+              collect(rule.else_actions);
+            });
+            collect(this.logic.form.actions);
+            collect(this.logic.form.else_actions);
+            return names;
+          },
+
+          timerCauseWarning() {
+            const cause = this.logic.form.cause || {};
+            if (cause.type !== "timer") {
+              return "";
+            }
+            const name = this.sanitizeTimerName(cause.timer_name || "");
+            if (!name || this.usedTimerNames().has(name)) {
+              return "";
+            }
+            return `No saved rule action currently sets timer ${name}.`;
+          },
+
+          syncActionToasts(events) {
+            events.forEach((event) => {
+              if (this.seenActionEventIds.includes(event.id)) {
+                return;
+              }
+              this.seenActionEventIds = [...this.seenActionEventIds, event.id].slice(-80);
+              this.actionToasts = [...this.actionToasts, event].slice(-5);
+              setTimeout(() => {
+                this.actionToasts = this.actionToasts.filter((toast) => toast.id !== event.id);
+              }, 3500);
+            });
           },
 
           activeLogicTimers() {

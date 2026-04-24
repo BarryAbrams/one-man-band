@@ -220,6 +220,10 @@ button {
   color: var(--error);
 }
 
+.warning-text {
+  color: var(--warm);
+}
+
 .error {
   background: #f8d7d4;
 }
@@ -515,7 +519,7 @@ button:hover {
   color: var(--error);
 }
 
-.timer-toast-stack {
+.runtime-toast-stack {
   position: fixed;
   right: 18px;
   bottom: 18px;
@@ -524,6 +528,50 @@ button:hover {
   gap: 10px;
   justify-items: end;
   pointer-events: none;
+}
+
+.action-toast-stack,
+.timer-toast-stack {
+  display: grid;
+  gap: 10px;
+  justify-items: end;
+}
+
+.action-toast {
+  min-width: 190px;
+  display: grid;
+  gap: 2px;
+  padding: 12px 14px;
+  border: 1px solid rgba(78, 60, 33, 0.14);
+  border-left: 5px solid var(--accent);
+  border-radius: 18px;
+  background: rgba(255, 252, 246, 0.96);
+  box-shadow: var(--shadow);
+  pointer-events: auto;
+}
+
+.action-solenoid {
+  border-left-color: var(--warm);
+}
+
+.action-servo,
+.action-pixels,
+.action-animation {
+  border-left-color: var(--accent);
+}
+
+.action-audio {
+  border-left-color: #5d6fb7;
+}
+
+.action-toast-label {
+  font-weight: 800;
+  font-size: 0.9rem;
+}
+
+.action-toast-detail {
+  color: var(--muted);
+  font-size: 0.82rem;
 }
 
 .timer-toast {
