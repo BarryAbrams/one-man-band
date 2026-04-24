@@ -410,74 +410,85 @@
               </div>
 
               <div class="logic-block">
-                <span class="logic-kicker">If</span>
-                <div class="logic-row">
-                  <label class="field-label" for="logic-cause-type">
-                    Cause
-                    <select id="logic-cause-type" x-model="logic.form.cause.type" @change="logicCauseChanged()">
-                      <option value="boot">Script boots</option>
-                      <option value="gpio">GPIO changes</option>
-                      <option value="timer">Timer countdown</option>
-                    </select>
-                  </label>
-                  <template x-if="logic.form.cause.type === 'gpio'">
-                    <label class="field-label">
-                      Input
-                      <select x-model="logic.form.cause.input">
-                        <template x-for="name in meta.gpio_inputs || []" :key="name">
-                          <option :value="name" x-text="`Input ${name}`"></option>
-                        </template>
-                      </select>
-                    </label>
-                  </template>
-                  <template x-if="logic.form.cause.type === 'gpio'">
-                    <label class="field-label">
-                      State
-                      <select x-model="logic.form.cause.state">
-                        <option :value="false">LOW</option>
-                        <option :value="true">HIGH</option>
-                      </select>
-                    </label>
-                  </template>
-                  <template x-if="logic.form.cause.type === 'timer'">
-                    <label class="field-label">
-                      Timer Name
-                      <input type="text" pattern="[A-Za-z0-9]+" x-model="logic.form.cause.timer_name" @input="logic.form.cause.timer_name = sanitizeTimerName(logic.form.cause.timer_name)">
-                    </label>
-                  </template>
-                  <template x-if="logic.form.cause.type === 'timer'">
-                    <label class="field-label">
-                      Event
-                      <select x-model="logic.form.cause.timer_event">
-                        <option value="started">Started</option>
-                        <option value="ended">Ended</option>
-                        <option value="position">Position</option>
-                      </select>
-                    </label>
-                  </template>
-                  <template x-if="logic.form.cause.type === 'timer' && logic.form.cause.timer_event === 'position'">
-                    <label class="field-label">
-                      Position %
-                      <input type="number" min="0" max="100" placeholder="Any" x-model="logic.form.cause.percent">
-                    </label>
-                  </template>
+                <div class="panel-header compact-header">
+                  <span class="logic-kicker">If</span>
+                  <button class="secondary" @click="addLogicCondition()">Add Cause</button>
                 </div>
+                <template x-if="!logic.form.cause.conditions.length">
+                  <p class="tile-subtitle">No causes selected yet.</p>
+                </template>
+                <template x-for="(condition, index) in logic.form.cause.conditions" :key="index">
+                  <div>
+                    <template x-if="index > 0">
+                      <div class="logic-and">AND</div>
+                    </template>
+                    <section class="logic-action">
+                      <div class="logic-row">
+                        <label class="field-label">
+                          Cause
+                          <select x-model="condition.type" @change="logicConditionChanged(condition)">
+                            <option value="">Choose cause</option>
+                            <option value="boot">Script boots</option>
+                            <option value="gpio">GPIO changes</option>
+                            <option value="timer">Timer countdown</option>
+                          </select>
+                        </label>
+                        <button class="secondary" @click="removeLogicCondition(index)">Remove</button>
+                      </div>
+                      <template x-if="condition.type === 'gpio'">
+                        <div class="logic-row">
+                          <label class="field-label">
+                            Input
+                            <select x-model="condition.input">
+                              <template x-for="name in meta.gpio_inputs || []" :key="name">
+                                <option :value="name" x-text="`Input ${name}`"></option>
+                              </template>
+                            </select>
+                          </label>
+                          <label class="field-label">
+                            State
+                            <select x-model="condition.state">
+                              <option :value="false">LOW</option>
+                              <option :value="true">HIGH</option>
+                            </select>
+                          </label>
+                          <label class="field-label">
+                            Debounce ms
+                            <input type="number" min="0" x-model.number="condition.debounce_ms">
+                          </label>
+                          <label class="field-label">
+                            Cooldown ms
+                            <input type="number" min="0" x-model.number="condition.cooldown_ms">
+                          </label>
+                        </div>
+                      </template>
+                      <template x-if="condition.type === 'timer'">
+                        <div class="logic-row">
+                          <label class="field-label">
+                            Timer Name
+                            <input type="text" pattern="[A-Za-z0-9]+" x-model="condition.timer_name" @input="condition.timer_name = sanitizeTimerName(condition.timer_name)">
+                          </label>
+                          <label class="field-label">
+                            Event
+                            <select x-model="condition.timer_event">
+                              <option value="started">Started</option>
+                              <option value="ended">Ended</option>
+                              <option value="position">Position</option>
+                            </select>
+                          </label>
+                          <template x-if="condition.timer_event === 'position'">
+                            <label class="field-label">
+                              Position %
+                              <input type="number" min="0" max="100" placeholder="Any" x-model="condition.percent">
+                            </label>
+                          </template>
+                        </div>
+                      </template>
+                    </section>
+                  </div>
+                </template>
                 <template x-if="timerCauseWarning()">
                   <p class="warning-text panel-note" x-text="timerCauseWarning()"></p>
-                </template>
-                <template x-if="logic.form.cause.type === 'gpio'">
-                  <div class="logic-row">
-                    <template x-if="logic.form.cause.type === 'gpio'">
-                      <label class="field-label">
-                        Debounce ms
-                        <input type="number" min="0" x-model.number="logic.form.cause.debounce_ms">
-                      </label>
-                    </template>
-                    <label class="field-label">
-                      Cooldown ms
-                      <input type="number" min="0" x-model.number="logic.form.cause.cooldown_ms">
-                    </label>
-                  </div>
                 </template>
               </div>
 
@@ -496,17 +507,32 @@
                         <label class="field-label">
                           Action
                           <select x-model="action.type" @change="logicActionChanged(action)">
-                            <option value="audio_play">Play audio</option>
-                            <option value="animation_play">Play animation</option>
-                            <option value="animation_stop">Stop animation</option>
-                            <option value="timer_set">Set timer</option>
-                            <option value="solenoid_pulse">Pulse relay</option>
-                            <option value="solenoid_set">Set relay</option>
-                            <option value="servo_set">Move servo</option>
-                            <option value="pixels_animate">Set neopixels</option>
+                            <option value="">Choose action</option>
+                            <optgroup label="Animation">
+                              <option value="animation_play">Play</option>
+                              <option value="animation_stop">Stop</option>
+                            </optgroup>
+                            <optgroup label="Media">
+                              <option value="audio_play">Audio: Play audio</option>
+                              <option value="audio_stop">Audio: Stop audio</option>
+                            </optgroup>
+                            <optgroup label="Relays">
+                              <option value="solenoid_set">Set Relay</option>
+                              <option value="solenoid_pulse">Pulse Relay</option>
+                            </optgroup>
+                            <optgroup label="Servos">
+                              <option value="servo_set">Set Servo Position</option>
+                            </optgroup>
+                            <optgroup label="Neopixels">
+                              <option value="pixels_animate">Neopixel actions</option>
+                            </optgroup>
+                            <optgroup label="System">
+                              <option value="timer_set">Timer: Start Timer</option>
+                              <option value="timer_end">Timer: End Timer</option>
+                            </optgroup>
                           </select>
                         </label>
-                        <button class="secondary" @click="removeLogicAction('actions', index)" :disabled="logic.form.actions.length === 1">Remove</button>
+                        <button class="secondary" @click="removeLogicAction('actions', index)">Remove</button>
                       </div>
 
                     <template x-if="action.type === 'audio_play'">
@@ -574,13 +600,13 @@
                       </div>
                     </template>
 
-                    <template x-if="action.type === 'timer_set'">
+                    <template x-if="action.type === 'timer_set' || action.type === 'timer_end'">
                       <div class="logic-row">
                         <label class="field-label">
                           Timer Name
                           <input type="text" pattern="[A-Za-z0-9]+" x-model="action.timer_name" @input="action.timer_name = sanitizeTimerName(action.timer_name)">
                         </label>
-                        <label class="field-label">
+                        <label class="field-label" x-show="action.type === 'timer_set'">
                           Duration ms
                           <input type="number" min="0" x-model.number="action.duration_ms">
                         </label>
@@ -679,7 +705,7 @@
                 </template>
               </div>
 
-              <div class="logic-block" x-show="supportsElse(logic.form.cause.type)" x-cloak>
+              <div class="logic-block" x-show="supportsElse()" x-cloak>
                 <div class="panel-header compact-header">
                   <span class="logic-kicker">Else</span>
                   <button class="secondary" @click="addLogicAction('else_actions')">Add Else Action</button>
@@ -697,14 +723,29 @@
                         <label class="field-label">
                           Action
                           <select x-model="action.type" @change="logicActionChanged(action)">
-                            <option value="audio_play">Play audio</option>
-                            <option value="animation_play">Play animation</option>
-                            <option value="animation_stop">Stop animation</option>
-                            <option value="timer_set">Set timer</option>
-                            <option value="solenoid_pulse">Pulse relay</option>
-                            <option value="solenoid_set">Set relay</option>
-                            <option value="servo_set">Move servo</option>
-                            <option value="pixels_animate">Set neopixels</option>
+                            <option value="">Choose action</option>
+                            <optgroup label="Animation">
+                              <option value="animation_play">Play</option>
+                              <option value="animation_stop">Stop</option>
+                            </optgroup>
+                            <optgroup label="Media">
+                              <option value="audio_play">Audio: Play audio</option>
+                              <option value="audio_stop">Audio: Stop audio</option>
+                            </optgroup>
+                            <optgroup label="Relays">
+                              <option value="solenoid_set">Set Relay</option>
+                              <option value="solenoid_pulse">Pulse Relay</option>
+                            </optgroup>
+                            <optgroup label="Servos">
+                              <option value="servo_set">Set Servo Position</option>
+                            </optgroup>
+                            <optgroup label="Neopixels">
+                              <option value="pixels_animate">Neopixel actions</option>
+                            </optgroup>
+                            <optgroup label="System">
+                              <option value="timer_set">Timer: Start Timer</option>
+                              <option value="timer_end">Timer: End Timer</option>
+                            </optgroup>
                           </select>
                         </label>
                         <button class="secondary" @click="removeLogicAction('else_actions', index)">Remove</button>
@@ -775,13 +816,13 @@
                       </div>
                     </template>
 
-                    <template x-if="action.type === 'timer_set'">
+                    <template x-if="action.type === 'timer_set' || action.type === 'timer_end'">
                       <div class="logic-row">
                         <label class="field-label">
                           Timer Name
                           <input type="text" pattern="[A-Za-z0-9]+" x-model="action.timer_name" @input="action.timer_name = sanitizeTimerName(action.timer_name)">
                         </label>
-                        <label class="field-label">
+                        <label class="field-label" x-show="action.type === 'timer_set'">
                           Duration ms
                           <input type="number" min="0" x-model.number="action.duration_ms">
                         </label>
@@ -1000,8 +1041,8 @@
               id: null,
               name: "New rule",
               enabled: true,
-              cause: { type: "gpio", input: "1", state: false, debounce_ms: 50, cooldown_ms: 1000 },
-              actions: [{ type: "solenoid_pulse", name: "P0", duration_ms: 1000 }],
+              cause: { conditions: [] },
+              actions: [],
               else_actions: [],
             },
           },
@@ -1060,8 +1101,11 @@
             });
           },
 
-          defaultCause(type = "gpio") {
+          defaultCause(type = "") {
             const firstInput = (this.meta.gpio_inputs || ["1"])[0];
+            if (!type) {
+              return { type: "" };
+            }
             if (type === "boot") {
               return { type: "boot" };
             }
@@ -1071,11 +1115,17 @@
             return { type: "gpio", input: firstInput, state: false, debounce_ms: 50, cooldown_ms: 1000 };
           },
 
-          defaultAction(type = "solenoid_pulse") {
+          defaultAction(type = "") {
             const firstSolenoid = (this.meta.solenoids || ["P0"])[0];
             const firstServo = (this.meta.servos || [0])[0];
+            if (!type) {
+              return { type: "" };
+            }
             if (type === "audio_play") {
               return { type, mode: "single", filename: "", playlist: [], speaker: "both" };
+            }
+            if (type === "audio_stop") {
+              return { type };
             }
             if (type === "animation_play") {
               return { type, animation_name: "Animation1", interrupt: false };
@@ -1085,6 +1135,12 @@
             }
             if (type === "timer_set") {
               return { type, timer_name: "Timer1", duration_ms: 1000 };
+            }
+            if (type === "timer_end") {
+              return { type, timer_name: "Timer1" };
+            }
+            if (type === "solenoid_pulse") {
+              return { type, name: firstSolenoid, duration_ms: 1000 };
             }
             if (type === "solenoid_set") {
               return { type, name: firstSolenoid, enabled: true };
@@ -1103,7 +1159,7 @@
                 duration_ms: 1000,
               };
             }
-            return { type: "solenoid_pulse", name: firstSolenoid, duration_ms: 1000 };
+            return { type: "" };
           },
 
           newLogicRule() {
@@ -1113,8 +1169,8 @@
               id: null,
               name: "New rule",
               enabled: true,
-              cause: this.defaultCause("gpio"),
-              actions: [this.defaultAction("solenoid_pulse")],
+              cause: { conditions: [] },
+              actions: [],
               else_actions: [],
             };
           },
@@ -1133,20 +1189,17 @@
           },
 
           editLogicRule(rule) {
-            const normalizedCause = this.normalizeLogicCause(rule.cause || {});
+            const conditions = this.normalizeLogicConditions(rule.cause || {});
             this.logic.selectedId = rule.id;
             this.logic.message = "";
             this.logic.form = {
               id: rule.id,
               name: rule.name,
               enabled: rule.enabled,
-              cause: { ...this.defaultCause(normalizedCause.type || "gpio"), ...normalizedCause },
+              cause: { conditions },
               actions: (rule.actions || []).map((action) => this.normalizeLogicAction(action)),
               else_actions: (rule.else_actions || []).map((action) => this.normalizeLogicAction(action)),
             };
-            if (!this.logic.form.actions.length) {
-              this.logic.form.actions = [this.defaultAction("solenoid_pulse")];
-            }
           },
 
           normalizeLogicAction(action) {
@@ -1155,7 +1208,7 @@
               normalized.mode = normalized.mode || "single";
               normalized.playlist = Array.isArray(normalized.playlist) ? normalized.playlist : [];
             }
-            if (normalized.type === "timer_set") {
+            if (normalized.type === "timer_set" || normalized.type === "timer_end") {
               normalized.timer_name = this.sanitizeTimerName(normalized.timer_name || "Timer1");
             }
             if (normalized.type === "pixels_animate") {
@@ -1180,10 +1233,28 @@
             return cause;
           },
 
-          logicCauseChanged() {
-            const type = this.logic.form.cause.type;
-            this.logic.form.cause = this.defaultCause(type);
-            if (!this.supportsElse(type)) {
+          normalizeLogicConditions(cause) {
+            const conditions = Array.isArray(cause.conditions) ? cause.conditions : (cause.type ? [cause] : []);
+            return conditions.map((condition) => {
+              const normalized = this.normalizeLogicCause(condition || {});
+              return { ...this.defaultCause(normalized.type || ""), ...normalized };
+            }).filter((condition) => condition.type);
+          },
+
+          addLogicCondition() {
+            this.logic.form.cause.conditions = [...this.logic.form.cause.conditions, this.defaultCause("")];
+          },
+
+          removeLogicCondition(index) {
+            this.logic.form.cause.conditions = this.logic.form.cause.conditions.filter((_, itemIndex) => itemIndex !== index);
+            if (!this.supportsElse()) {
+              this.logic.form.else_actions = [];
+            }
+          },
+
+          logicConditionChanged(condition) {
+            Object.assign(condition, this.defaultCause(condition.type));
+            if (!this.supportsElse()) {
               this.logic.form.else_actions = [];
             }
           },
@@ -1193,13 +1264,10 @@
           },
 
           addLogicAction(target = "actions") {
-            this.logic.form[target] = [...this.logic.form[target], this.defaultAction("audio_play")];
+            this.logic.form[target] = [...this.logic.form[target], this.defaultAction("")];
           },
 
           removeLogicAction(target, index) {
-            if (target === "actions" && this.logic.form.actions.length <= 1) {
-              return;
-            }
             this.logic.form[target] = this.logic.form[target].filter((_, itemIndex) => itemIndex !== index);
           },
 
@@ -1221,7 +1289,7 @@
           },
 
           serializeLogicActions(actions) {
-            return actions.map((action) => {
+            return actions.filter((action) => action.type).map((action) => {
               const payload = { ...action };
               if (payload.type === "audio_play") {
                 payload.mode = payload.mode || "single";
@@ -1237,8 +1305,11 @@
               if (payload.type === "animation_stop") {
                 payload.animation_name = String(payload.animation_name || "").trim();
               }
-              if (payload.type === "timer_set") {
+              if (payload.type === "timer_set" || payload.type === "timer_end") {
                 payload.timer_name = this.sanitizeTimerName(payload.timer_name || "Timer1");
+                if (payload.type === "timer_end") {
+                  delete payload.duration_ms;
+                }
               }
               if (payload.type === "solenoid_set") {
                 payload.enabled = this.logicBool(payload.enabled);
@@ -1257,36 +1328,46 @@
           },
 
           serializeLogicForm() {
-            const cause = { ...this.logic.form.cause };
-            if (cause.type === "gpio") {
-              cause.state = this.logicBool(cause.state);
-            }
-            if (cause.type === "timer") {
-              cause.timer_name = this.sanitizeTimerName(cause.timer_name || "Timer1");
-              cause.timer_event = cause.timer_event || "ended";
-            }
-            if (cause.type === "timer" && cause.timer_event === "position") {
-              if (cause.percent === "" || cause.percent === null || cause.percent === undefined) {
-                delete cause.percent;
-              } else {
-                cause.percent = Math.max(0, Math.min(100, Number(cause.percent)));
+            const conditions = (this.logic.form.cause.conditions || []).filter((condition) => condition.type).map((condition) => {
+              const payload = { ...condition };
+              if (payload.type === "gpio") {
+                payload.state = this.logicBool(payload.state);
               }
-            } else {
-              delete cause.percent;
-            }
+              if (payload.type === "timer") {
+                payload.timer_name = this.sanitizeTimerName(payload.timer_name || "Timer1");
+                payload.timer_event = payload.timer_event || "ended";
+              }
+              if (payload.type === "timer" && payload.timer_event === "position") {
+                if (payload.percent === "" || payload.percent === null || payload.percent === undefined) {
+                  delete payload.percent;
+                } else {
+                  payload.percent = Math.max(0, Math.min(100, Number(payload.percent)));
+                }
+              } else {
+                delete payload.percent;
+              }
+              return payload;
+            });
+            const actions = this.serializeLogicActions(this.logic.form.actions);
             return {
               id: this.logic.form.id,
               name: this.logic.form.name,
               enabled: this.logic.form.enabled,
-              cause,
-              actions: this.serializeLogicActions(this.logic.form.actions),
-              else_actions: this.supportsElse(cause.type) ? this.serializeLogicActions(this.logic.form.else_actions || []) : [],
+              cause: { conditions },
+              actions,
+              else_actions: this.supportsElse() ? this.serializeLogicActions(this.logic.form.else_actions || []) : [],
             };
           },
 
           async saveLogicRule() {
             try {
               const payload = this.serializeLogicForm();
+              if (!payload.cause.conditions.length) {
+                throw new Error("Choose at least one cause");
+              }
+              if (!payload.actions.length) {
+                throw new Error("Choose at least one action");
+              }
               const url = payload.id ? `/api/logic/${payload.id}` : "/api/logic";
               const response = await fetch(url, {
                 method: payload.id ? "PUT" : "POST",
@@ -1325,27 +1406,35 @@
 
           logicRuleSummary(rule) {
             const cause = rule.cause || {};
+            const conditions = this.normalizeLogicConditions(cause);
             const actionCount = (rule.actions || []).length;
             const elseCount = (rule.else_actions || []).length;
             const suffix = elseCount ? `, else ${elseCount} action${elseCount === 1 ? "" : "s"}` : "";
-            if (cause.type === "boot") {
-              return `On boot, ${actionCount} action${actionCount === 1 ? "" : "s"}`;
-            }
-            if (cause.type === "gpio") {
-              return `Input ${cause.input} ${this.logicBool(cause.state) ? "HIGH" : "LOW"}, ${actionCount} action${actionCount === 1 ? "" : "s"}${suffix}`;
-            }
-            if (cause.type === "timer" || this.isTimerCause(cause.type)) {
-              const timerCause = this.normalizeLogicCause(cause);
-              if (timerCause.timer_event === "started") {
-                return `${timerCause.timer_name || "Timer"} started, ${actionCount} action${actionCount === 1 ? "" : "s"}`;
-              }
-              if (timerCause.timer_event === "position") {
-                const position = timerCause.percent === undefined ? "any position" : `${timerCause.percent}%`;
-                return `${timerCause.timer_name || "Timer"} at ${position}, ${actionCount} action${actionCount === 1 ? "" : "s"}`;
-              }
-              return `${timerCause.timer_name || "Timer"} ended, ${actionCount} action${actionCount === 1 ? "" : "s"}`;
+            if (conditions.length) {
+              const label = conditions.map((condition) => this.logicConditionSummary(condition)).join(" AND ");
+              return `${label}, ${actionCount} action${actionCount === 1 ? "" : "s"}${suffix}`;
             }
             return `${actionCount} action${actionCount === 1 ? "" : "s"}`;
+          },
+
+          logicConditionSummary(condition) {
+            if (condition.type === "boot") {
+              return "On boot";
+            }
+            if (condition.type === "gpio") {
+              return `Input ${condition.input} ${this.logicBool(condition.state) ? "HIGH" : "LOW"}`;
+            }
+            if (condition.type === "timer") {
+              if (condition.timer_event === "started") {
+                return `${condition.timer_name || "Timer"} started`;
+              }
+              if (condition.timer_event === "position") {
+                const position = condition.percent === undefined ? "any position" : `${condition.percent}%`;
+                return `${condition.timer_name || "Timer"} at ${position}`;
+              }
+              return `${condition.timer_name || "Timer"} ended`;
+            }
+            return "Condition";
           },
 
           logicBool(value) {
@@ -1369,8 +1458,9 @@
             return "ended";
           },
 
-          supportsElse(type) {
-            return type === "gpio";
+          supportsElse() {
+            const conditions = this.logic.form.cause.conditions || [];
+            return conditions.length > 0 && conditions.every((condition) => condition.type === "gpio");
           },
 
           sanitizeTimerName(value) {
@@ -1399,15 +1489,14 @@
           },
 
           timerCauseWarning() {
-            const cause = this.logic.form.cause || {};
-            if (cause.type !== "timer") {
+            const missing = (this.logic.form.cause.conditions || [])
+              .filter((condition) => condition.type === "timer")
+              .map((condition) => this.sanitizeTimerName(condition.timer_name || ""))
+              .filter((name) => name && !this.usedTimerNames().has(name));
+            if (!missing.length) {
               return "";
             }
-            const name = this.sanitizeTimerName(cause.timer_name || "");
-            if (!name || this.usedTimerNames().has(name)) {
-              return "";
-            }
-            return `No saved rule action currently sets timer ${name}.`;
+            return `No saved rule action currently sets timer ${missing[0]}.`;
           },
 
           syncActionToasts(events) {

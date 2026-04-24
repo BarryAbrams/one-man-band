@@ -103,7 +103,7 @@ class LogicStore:
         now = time.time()
         name = str(payload.get("name") or "Untitled rule").strip() or "Untitled rule"
         enabled = bool(payload.get("enabled", True))
-        cause = self._dict_field(payload, "cause")
+        cause = self._cause_field(payload)
         actions = self._actions_field(payload)
         else_actions = self._optional_actions_field(payload, "else_actions")
         rule_id = payload.get("id")
@@ -176,6 +176,19 @@ class LogicStore:
             raise ValueError(f"Rule {key} must be an object")
         return value
 
+    def _cause_field(self, payload: dict[str, Any]) -> dict[str, Any]:
+        cause = self._dict_field(payload, "cause")
+        if "conditions" not in cause:
+            if not cause.get("type"):
+                raise ValueError("Rule must have at least one condition")
+            cause = {"conditions": [cause]}
+        conditions = cause.get("conditions")
+        if not isinstance(conditions, list) or not conditions:
+            raise ValueError("Rule must have at least one condition")
+        if not all(isinstance(condition, dict) for condition in conditions):
+            raise ValueError("Rule conditions must be objects")
+        return {"conditions": conditions}
+
     def _actions_field(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         value = payload.get("actions")
         if not isinstance(value, list) or not value:
@@ -235,9 +248,11 @@ class LogicEngine:
             ],
             "logic_action_types": [
                 "audio_play",
+                "audio_stop",
                 "animation_play",
                 "animation_stop",
                 "timer_set",
+                "timer_end",
                 "solenoid_set",
                 "solenoid_pulse",
                 "servo_set",
@@ -307,7 +322,12 @@ class LogicEngine:
             self._boot_ran = True
         fired: list[str] = []
         for rule in self._store.list_rules():
-            if rule.enabled and rule.cause.get("type") == "boot":
+            conditions = self._conditions(rule)
+            if (
+                rule.enabled
+                and conditions
+                and all(condition.get("type") == "boot" for condition in conditions)
+            ):
                 self._fire(rule)
                 fired.append(rule.name)
         return fired
@@ -342,43 +362,95 @@ class LogicEngine:
         gpio: dict[str, bool],
         now: float,
     ) -> str | None:
-        cause_type = rule.cause.get("type")
-        if cause_type == "gpio":
-            return self._gpio_branch_to_fire(rule, gpio, now)
-        if cause_type in {"timer", "timer_started", "timer_ended", "timer_position"}:
-            return "then" if self._timer_event_should_fire(rule, now) else None
+        conditions = self._conditions(rule)
+        if not conditions:
+            return None
+        if any(condition.get("type") == "boot" for condition in conditions):
+            return None
+        if self._conditions_are_satisfied(rule, conditions, gpio, now):
+            with self._lock:
+                if self._last_branch.get(rule.id) == "then":
+                    return None
+                if now - self._last_fire.get(rule.id, 0) < self._cooldown_seconds(conditions):
+                    return None
+                self._last_branch[rule.id] = "then"
+            return "then"
+        if self._conditions_support_else(conditions):
+            with self._lock:
+                if self._last_branch.get(rule.id) == "else":
+                    return None
+                if not rule.else_actions:
+                    self._last_branch[rule.id] = "else"
+                    return None
+                self._last_branch[rule.id] = "else"
+            return "else"
         return None
 
-    def _gpio_branch_to_fire(self, rule: LogicRule, gpio: dict[str, bool], now: float) -> str | None:
-        input_name = str(rule.cause.get("input") or "")
-        expected = self._bool(rule.cause.get("state", True))
-        debounce_seconds = max(0, int(rule.cause.get("debounce_ms", 50))) / 1000
-        cooldown_seconds = max(0, int(rule.cause.get("cooldown_ms", 1000))) / 1000
-        current = gpio.get(input_name, False)
-        branch = "then" if current == expected else "else"
+    def _conditions(self, rule: LogicRule) -> list[dict[str, Any]]:
+        conditions = rule.cause.get("conditions")
+        if isinstance(conditions, list):
+            return [condition for condition in conditions if isinstance(condition, dict)]
+        if rule.cause.get("type"):
+            return [rule.cause]
+        return []
 
+    def _conditions_are_satisfied(
+        self,
+        rule: LogicRule,
+        conditions: list[dict[str, Any]],
+        gpio: dict[str, bool],
+        now: float,
+    ) -> bool:
+        for condition in conditions:
+            condition_type = condition.get("type")
+            if condition_type == "gpio":
+                input_name = str(condition.get("input") or "")
+                expected = self._bool(condition.get("state", True))
+                if gpio.get(input_name, False) != expected:
+                    with self._lock:
+                        self._candidate_since.pop(rule.id, None)
+                    return False
+                continue
+            if condition_type in {"timer", "timer_started", "timer_ended", "timer_position"}:
+                if not self._timer_event_should_fire(rule, condition, now):
+                    return False
+                continue
+            if condition_type == "boot":
+                continue
+            return False
+
+        debounce_seconds = self._debounce_seconds(conditions)
         with self._lock:
-            if self._candidate_branch.get(rule.id) != branch:
-                self._candidate_branch[rule.id] = branch
-                self._candidate_since[rule.id] = now
-                return None
-
-            stable_since = self._candidate_since.get(rule.id, now)
+            stable_since = self._candidate_since.setdefault(rule.id, now)
             if now - stable_since < debounce_seconds:
-                return None
-            if self._last_branch.get(rule.id) == branch:
-                return None
-            if branch == "then" and now - self._last_fire.get(rule.id, 0) < cooldown_seconds:
-                return None
-            if branch == "else" and not rule.else_actions:
-                self._last_branch[rule.id] = branch
-                return None
+                return False
+        return True
 
-            self._last_branch[rule.id] = branch
-            return branch
+    def _conditions_support_else(self, conditions: list[dict[str, Any]]) -> bool:
+        return conditions and all(condition.get("type") == "gpio" for condition in conditions)
 
-    def _timer_event_should_fire(self, rule: LogicRule, now: float) -> bool:
-        timer_name = self._timer_name(rule.cause.get("timer_name") or "")
+    def _debounce_seconds(self, conditions: list[dict[str, Any]]) -> float:
+        return max(
+            [
+                max(0, int(condition.get("debounce_ms", 50))) / 1000
+                for condition in conditions
+                if condition.get("type") == "gpio"
+            ]
+            or [0]
+        )
+
+    def _cooldown_seconds(self, conditions: list[dict[str, Any]]) -> float:
+        return max(
+            [
+                max(0, int(condition.get("cooldown_ms", 1000))) / 1000
+                for condition in conditions
+                if condition.get("type") == "gpio"
+            ]
+            or [0]
+        )
+
+    def _timer_event_should_fire(self, rule: LogicRule, condition: dict[str, Any], now: float) -> bool:
+        timer_name = self._timer_name(condition.get("timer_name") or "")
         if not timer_name:
             return False
 
@@ -387,7 +459,7 @@ class LogicEngine:
             if timer is None:
                 return False
 
-            timer_event = self._timer_event(rule.cause)
+            timer_event = self._timer_event(condition)
             if timer_event == "started":
                 key = (rule.id, timer.name, timer.generation)
                 if key in self._timer_start_seen:
@@ -403,7 +475,7 @@ class LogicEngine:
                 return True
 
             if timer_event == "position":
-                percent = self._optional_percent(rule.cause.get("percent"))
+                percent = self._optional_percent(condition.get("percent"))
                 key = (rule.id, timer.name, timer.generation, percent)
                 if key in self._timer_position_seen:
                     return False
@@ -443,6 +515,26 @@ class LogicEngine:
                 generation=self._timer_generation,
             )
 
+    def _end_timer(self, name: str) -> str:
+        timer_name = self._timer_name(name)
+        if not timer_name:
+            raise ValueError("Timer name must use only A-Z, a-z, and 0-9")
+        now = time.monotonic()
+        with self._lock:
+            timer = self._timers.get(timer_name)
+            if timer is None:
+                self._timer_generation += 1
+                self._timers[timer_name] = CountdownTimer(
+                    name=timer_name,
+                    duration_seconds=0,
+                    started_at=now,
+                    generation=self._timer_generation,
+                    ended=True,
+                )
+            else:
+                timer.ended = True
+        return timer_name
+
     def _fire(self, rule: LogicRule, branch: str = "then") -> None:
         actions = rule.actions if branch == "then" else rule.else_actions
         for index, action in enumerate(actions):
@@ -457,6 +549,9 @@ class LogicEngine:
             if filename:
                 self._audio_manager.play(filename, str(action.get("speaker") or "both"))
                 self._record_action_event("audio", "Audio", filename)
+        elif action_type == "audio_stop":
+            self._audio_manager.stop()
+            self._record_action_event("audio", "Audio stopped", "All audio")
         elif action_type == "animation_play":
             name = self._animation_name(action.get("animation_name") or "")
             if name:
@@ -483,6 +578,9 @@ class LogicEngine:
                 int(action.get("duration_ms", 1000)),
             )
             self._record_action_event("timer", "Timer", str(action.get("timer_name") or ""))
+        elif action_type == "timer_end":
+            timer_name = self._end_timer(str(action.get("timer_name") or ""))
+            self._record_action_event("timer", "Timer ended", timer_name)
         elif action_type == "solenoid_set":
             self._controller.set_solenoid(
                 str(action.get("name") or ""), self._bool(action.get("enabled", True))
