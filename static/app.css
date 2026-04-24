@@ -675,8 +675,12 @@ button:hover {
   stroke: rgba(78, 60, 33, 0.26);
 }
 
-.relay-line {
-  stroke: var(--warm);
+.relay-line-high {
+  stroke: #c7352f;
+}
+
+.relay-line-low {
+  stroke: #14110d;
 }
 
 .servo-line {

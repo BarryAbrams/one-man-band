@@ -543,9 +543,9 @@
                         <template x-if="selectedAnimationTrack().type === 'solenoid'">
                           <label class="field-label">
                             State
-                            <select x-model="keyframe.value" @change="scheduleAnimationSave()">
-                              <option :value="true">HIGH</option>
-                              <option :value="false">LOW</option>
+                            <select x-model="keyframe.value" @change="keyframe.value = logicBool(keyframe.value); scheduleAnimationSave()">
+                              <option value="true">HIGH</option>
+                              <option value="false">LOW</option>
                             </select>
                           </label>
                         </template>
@@ -1549,7 +1549,9 @@
               timeline: {
                 tracks: (form.timeline.tracks || []).map((track) => ({
                   ...track,
-                  keyframes: [...(track.keyframes || [])].sort((a, b) => Number(a.time_ms || 0) - Number(b.time_ms || 0)),
+                  keyframes: [...(track.keyframes || [])]
+                    .map((keyframe) => track.type === "solenoid" ? { ...keyframe, value: this.logicBool(keyframe.value) } : keyframe)
+                    .sort((a, b) => Number(a.time_ms || 0) - Number(b.time_ms || 0)),
                 })),
               },
             };
@@ -1694,24 +1696,23 @@
 
           solenoidTimelineVisual(track) {
             const keyframes = this.sortedKeyframes(track);
-            const yLow = 76;
-            const yHigh = 24;
             if (!keyframes.length) {
-              return `<path class="timeline-state-line muted-line" d="M 0 ${yLow} L 100 ${yLow}"></path>`;
+              return `<path class="timeline-state-line muted-line" d="M 0 50 L 100 50"></path>`;
             }
-            let path = "";
-            let previousX = 0;
-            let previousY = keyframes[0].value ? yHigh : yLow;
-            path += `M 0 ${previousY}`;
-            keyframes.forEach((keyframe) => {
-              const x = this.animationTimePercent(keyframe.time_ms);
-              const y = this.logicBool(keyframe.value) ? yHigh : yLow;
-              path += ` L ${x} ${previousY} L ${x} ${y}`;
-              previousX = x;
-              previousY = y;
+            const segments = keyframes.map((keyframe, index) => {
+              const start = this.animationTimePercent(keyframe.time_ms);
+              const next = keyframes[index + 1];
+              const end = next ? this.animationTimePercent(next.time_ms) : 100;
+              const className = this.logicBool(keyframe.value) ? "relay-line-high" : "relay-line-low";
+              return `<path class="timeline-state-line ${className}" d="M ${start} 50 L ${end} 50"></path>`;
             });
-            path += ` L 100 ${previousY}`;
-            return `<path class="timeline-state-line relay-line" d="${path}"></path><text class="timeline-axis-label" x="1" y="22">HIGH</text><text class="timeline-axis-label" x="1" y="88">LOW</text>`;
+            const first = keyframes[0];
+            const firstX = this.animationTimePercent(first.time_ms);
+            if (firstX > 0) {
+              const className = this.logicBool(first.value) ? "relay-line-high" : "relay-line-low";
+              segments.unshift(`<path class="timeline-state-line ${className}" d="M 0 50 L ${firstX} 50"></path>`);
+            }
+            return `${segments.join("")}<text class="timeline-axis-label" x="1" y="22">RED HIGH</text><text class="timeline-axis-label" x="1" y="88">BLACK LOW</text>`;
           },
 
           servoTimelineVisual(track) {
@@ -1911,7 +1912,7 @@
               return;
             }
             if (track.type === "solenoid") {
-              this.socket.emit("solenoid:set", { name: track.target.name, enabled: Boolean(keyframe.value) });
+              this.socket.emit("solenoid:set", { name: track.target.name, enabled: this.logicBool(keyframe.value) });
             }
             if (track.type === "pixels") {
               this.socket.emit("pixels:animate", this.pixelAnimationPayload(track, keyframe));
