@@ -1383,7 +1383,7 @@
             }
 
             this.socket = io({
-              transports: ["websocket", "polling"],
+              transports: ["websocket", "websocket"],
             });
 
             this.socket.on("connect", () => {
