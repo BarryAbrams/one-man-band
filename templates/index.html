@@ -1382,9 +1382,7 @@
               return;
             }
 
-            this.socket = io({
-              transports: ["websocket", "websocket"],
-            });
+            this.socket = io();
 
             this.socket.on("connect", () => {
               this.socketConnected = true;
