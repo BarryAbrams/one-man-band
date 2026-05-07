@@ -113,6 +113,28 @@ class AudioManager:
         storage.save(target)
         return filename
 
+    def delete_track(self, filename: str) -> AudioStatus:
+        filename = secure_filename(filename or "")
+        if not filename:
+            raise ValueError("Audio file not found")
+
+        path = self._audio_dir / filename
+        if path.suffix.lower() not in ALLOWED_AUDIO_EXTENSIONS or not path.is_file():
+            raise ValueError(f"Audio file not found: {filename}")
+
+        with self._lock:
+            if self._status.current_track == path.name:
+                if self._status.initialized and pygame is not None:
+                    pygame.mixer.music.stop()
+                    if self._channel is not None:
+                        self._channel.stop()
+                        self._channel = None
+                self._status.playing = False
+                self._status.paused = False
+                self._status.current_track = None
+            path.unlink()
+            return AudioStatus(**asdict(self._status))
+
     def play(self, filename: str, speaker: str = "both") -> AudioStatus:
         with self._lock:
             if not self._ensure_mixer():

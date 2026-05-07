@@ -360,7 +360,10 @@
                   <span class="tile-title" x-text="track.name"></span>
                   <span class="tile-subtitle" x-text="formatBytes(track.size_bytes)"></span>
                 </div>
-                <button class="pill-button active" @click="playAudio(track.name)">Play</button>
+                <div class="actions">
+                  <button class="pill-button active" @click="playAudio(track.name)">Play</button>
+                  <button class="pill-button danger" @click="deleteAudio(track.name)">Delete</button>
+                </div>
               </div>
             </template>
           </div>
@@ -2663,6 +2666,28 @@
               };
             } finally {
               this.uploading = false;
+            }
+          },
+
+          async deleteAudio(filename) {
+            if (!window.confirm(`Delete audio file "${filename}"? This cannot be undone.`)) {
+              return;
+            }
+            try {
+              const response = await fetch(`/api/audio/files/${encodeURIComponent(filename)}`, {
+                method: "DELETE",
+              });
+              const payload = await response.json();
+              if (!response.ok) {
+                throw new Error(payload.error || `HTTP ${response.status}`);
+              }
+              this.audio.tracks = payload.tracks || [];
+              this.audio.status = payload.status || this.audio.status;
+            } catch (error) {
+              this.audio.status = {
+                ...this.audio.status,
+                error: `Delete failed: ${error.message}`,
+              };
             }
           },
 

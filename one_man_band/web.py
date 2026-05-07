@@ -157,6 +157,16 @@ def create_app() -> Flask:
             }
         )
 
+    @app.delete("/api/audio/files/<path:filename>")
+    def audio_delete(filename: str):
+        try:
+            status = audio_manager.delete_track(filename)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 404
+        payload = {"status": status.to_payload(), "tracks": audio_manager.list_tracks()}
+        socketio.emit("audio:update", payload)
+        return jsonify({"ok": True, **payload})
+
     @app.get("/favicon.ico")
     def favicon():
         return ("", 204)
