@@ -422,8 +422,6 @@
                   <button class="secondary" @click="addAnimationTrack('audio')">Add Audio</button>
                 </div>
                 <div class="actions">
-                  <button class="secondary" @click="playAnimationPreview()" :disabled="animations.playing">Play Live</button>
-                  <button class="secondary" @click="stopAnimationPreview()" :disabled="!animations.playing">Stop</button>
                   <button class="secondary danger" @click="deleteAnimation()" :disabled="!animations.form.id">Delete</button>
                 </div>
               </div>
@@ -593,6 +591,17 @@
           </div>
         </section>
         <div class="timeline-shell" x-show="activeTab === 'animations'" x-cloak>
+          <div class="timeline-action-row">
+            <div class="actions">
+              <button class="secondary" @click="playAnimationFromStart()" :disabled="animations.playing">Play From Start</button>
+              <button class="secondary" @click="playAnimationPreview()" :disabled="animations.playing">Play Live</button>
+              <button class="secondary" @click="stopAnimationPreview()" :disabled="!animations.playing">Stop</button>
+            </div>
+            <label class="check-label timeline-loop">
+              <input type="checkbox" x-model="animations.loop">
+              Loop
+            </label>
+          </div>
           <div class="timeline-controls">
             <label class="servo-label" for="animation-playhead">
               Playhead <span x-text="formatTimerMs(animations.playhead_ms)"></span>
@@ -605,6 +614,7 @@
               :max="animations.form.duration_ms"
               step="10"
               x-model.number="animations.playhead_ms"
+              @input="scrubAnimationPreview()"
             >
           </div>
           <div class="timeline-ruler">
@@ -1340,6 +1350,7 @@
             selectedTrackId: null,
             playhead_ms: 0,
             playing: false,
+            loop: false,
             playTimers: [],
             raf: null,
             waveforms: {},
@@ -1836,17 +1847,25 @@
               .finally(() => context.close?.());
           },
 
+          playAnimationFromStart() {
+            this.animations.playhead_ms = 0;
+            this.playAnimationPreview();
+          },
+
           playAnimationPreview() {
             if (!this.socketConnected || !this.socket) {
               this.animations.message = "Socket is not connected";
               return;
             }
+            const startOffset = Math.max(0, Math.min(Number(this.animations.playhead_ms) || 0, Number(this.animations.form.duration_ms) || 0));
             this.stopAnimationPreview(false);
+            this.animations.playhead_ms = startOffset;
             this.animations.playing = true;
             this.animations.message = "Playing live preview";
             this.animations.playTimers = [];
             this.animations.lastServoFrame = -100;
-            const startedAt = performance.now();
+            this.scrubAnimationPreview(false);
+            const startedAt = performance.now() - startOffset;
             const duration = Number(this.animations.form.duration_ms) || 0;
             const tick = () => {
               const elapsed = performance.now() - startedAt;
@@ -1863,7 +1882,11 @@
                 return;
               }
               (track.keyframes || []).forEach((keyframe) => {
-                const timer = setTimeout(() => this.applyAnimationKeyframe(track, keyframe), Math.max(0, Number(keyframe.time_ms) || 0));
+                const keyframeTime = Number(keyframe.time_ms) || 0;
+                if (keyframeTime < startOffset) {
+                  return;
+                }
+                const timer = setTimeout(() => this.applyAnimationKeyframe(track, keyframe), Math.max(0, keyframeTime - startOffset));
                 this.animations.playTimers.push(timer);
               });
             });
@@ -1892,6 +1915,64 @@
             this.animations.playing = false;
             this.setAnimationRelaysLow();
             this.stopAnimationAudio();
+            if (this.animations.loop) {
+              this.animations.playhead_ms = 0;
+              this.playAnimationPreview();
+            }
+          },
+
+          scrubAnimationPreview(stopPlayback = true) {
+            if (stopPlayback && this.animations.playing) {
+              this.stopAnimationPreview(false);
+            }
+            if (!this.socketConnected || !this.socket) {
+              return;
+            }
+            const timeMs = Math.max(0, Math.min(Number(this.animations.playhead_ms) || 0, Number(this.animations.form.duration_ms) || 0));
+            this.animations.playhead_ms = timeMs;
+            (this.animations.form.timeline.tracks || []).forEach((track) => {
+              if (track.type === "audio") {
+                return;
+              }
+              if (track.type === "solenoid" && track.target?.name) {
+                const keyframe = this.keyframeAtTime(track, timeMs);
+                this.socket.emit("solenoid:set", { name: track.target.name, enabled: keyframe ? this.logicBool(keyframe.value) : false });
+              }
+              if (track.type === "servo") {
+                const value = this.servoValueAtTime(track, timeMs);
+                if (value !== null) {
+                  this.socket.emit("servo:set_value", { channel: track.target.channel, value });
+                }
+              }
+              if (track.type === "pixels") {
+                const keyframe = this.keyframeAtTime(track, timeMs);
+                if (keyframe) {
+                  this.socket.emit("pixels:animate", this.pixelStatePayload(track, keyframe));
+                }
+              }
+            });
+          },
+
+          keyframeAtTime(track, timeMs) {
+            const keyframes = this.sortedKeyframes(track);
+            if (!keyframes.length) {
+              return null;
+            }
+            return keyframes.filter((keyframe) => Number(keyframe.time_ms || 0) <= timeMs).at(-1) || keyframes[0];
+          },
+
+          servoValueAtTime(track, timeMs) {
+            const keyframes = this.sortedKeyframes(track);
+            if (!keyframes.length) {
+              return null;
+            }
+            const nextIndex = keyframes.findIndex((keyframe) => Number(keyframe.time_ms || 0) >= timeMs);
+            const current = nextIndex <= 0 ? keyframes[0] : keyframes[nextIndex - 1];
+            const next = nextIndex <= 0 ? keyframes[0] : keyframes[nextIndex] || current;
+            const span = Math.max(1, Number(next.time_ms || 0) - Number(current.time_ms || 0));
+            const rawT = current === next ? 1 : (timeMs - Number(current.time_ms || 0)) / span;
+            const t = this.animationEase(Math.max(0, Math.min(1, rawT)), current.easing || "linear");
+            return Number(current.value || 0) + (Number(next.value || 0) - Number(current.value || 0)) * t;
           },
 
           setAnimationRelaysLow() {
@@ -1939,18 +2020,10 @@
             }
             this.animations.lastServoFrame = elapsedMs;
             (this.animations.form.timeline.tracks || []).filter((track) => track.type === "servo").forEach((track) => {
-              const keyframes = [...(track.keyframes || [])].sort((a, b) => Number(a.time_ms || 0) - Number(b.time_ms || 0));
-              if (!keyframes.length) {
-                return;
+              const value = this.servoValueAtTime(track, elapsedMs);
+              if (value !== null) {
+                this.socket.emit("servo:set_value", { channel: track.target.channel, value });
               }
-              const nextIndex = keyframes.findIndex((keyframe) => Number(keyframe.time_ms || 0) >= elapsedMs);
-              const current = nextIndex <= 0 ? keyframes[0] : keyframes[nextIndex - 1];
-              const next = nextIndex <= 0 ? keyframes[0] : keyframes[nextIndex] || current;
-              const span = Math.max(1, Number(next.time_ms || 0) - Number(current.time_ms || 0));
-              const rawT = current === next ? 1 : (elapsedMs - Number(current.time_ms || 0)) / span;
-              const t = this.animationEase(Math.max(0, Math.min(1, rawT)), current.easing || "linear");
-              const value = Number(current.value || 0) + (Number(next.value || 0) - Number(current.value || 0)) * t;
-              this.socket.emit("servo:set_value", { channel: track.target.channel, value });
             });
           },
 
@@ -1983,6 +2056,23 @@
               start_rgb: this.hexToRgb(keyframe.color || "#000000"),
               end_rgb: this.hexToRgb(next?.color || keyframe.color || "#000000"),
               duration_ms: duration,
+              animation_id: 0,
+            };
+          },
+
+          pixelStatePayload(track, keyframe) {
+            const target = track.target || {};
+            const rails = target.scope === "all" ? (this.meta.pixel_rails || []) : [target.line || "1"];
+            const start = target.scope === "line" || target.scope === "all" ? 0 : Number(target.start || 0);
+            const count = target.scope === "pixel" ? 1 : (target.scope === "range" ? Number(target.count || 1) : 0);
+            const color = this.hexToRgb(keyframe.color || "#000000");
+            return {
+              rails,
+              start,
+              count,
+              start_rgb: color,
+              end_rgb: color,
+              duration_ms: 1,
               animation_id: 0,
             };
           },

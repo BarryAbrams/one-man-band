@@ -589,6 +589,18 @@ button:hover {
   box-shadow: 0 10px 34px rgba(60, 40, 10, 0.12);
 }
 
+.timeline-action-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.timeline-loop {
+  min-height: 0;
+}
+
 .timeline-controls .servo-label {
   margin-top: 0;
 }
