@@ -284,6 +284,7 @@ button:hover {
 
 .rail-picker,
 .mode-picker,
+.pixel-target-row,
 .pixel-fields,
 .color-grid {
   display: grid;
@@ -297,6 +298,11 @@ button:hover {
 
 .mode-picker {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.pixel-target-row {
+  grid-template-columns: minmax(150px, 1fr) auto;
+  align-items: end;
 }
 
 .pixel-fields,

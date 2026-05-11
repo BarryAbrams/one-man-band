@@ -12,19 +12,32 @@ Closed-system Raspberry Pi control surface for an RP2040-driven hardware rig.
 
 ## Run locally
 
+For UI work on a non-Pi machine, use mock hardware and install only the web/runtime
+dependencies:
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install "Flask>=3.0,<4.0" "Flask-SocketIO>=5.3,<6.0" "simple-websocket>=1.0,<2.0" "smbus2>=0.4.3,<1.0"
 OMB_MOCK_HARDWARE=1 python app.py
 ```
 
 Then open `http://localhost:5000`.
 
+On the Raspberry Pi, install the full project requirements so GPIO and audio playback
+support are available:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python app.py
+```
+
 ## Pi notes
 
 - Real hardware mode is the default. It expects the RP2040 at I2C address `0x12` on bus `1`.
-- The app expects RP2040 protocol version `1`.
+- The app expects RP2040 protocol version `2`.
 - Mock mode is useful for browser/UI work before the Pi and RP2040 are wired together.
 - Audio uploads are stored under `uploads/audio/`.
 - Audio playback uses `pygame`, so install project requirements inside the same virtualenv you use to run `app.py`.
@@ -65,8 +78,8 @@ NeoPixel command registers:
 
 Animation IDs:
 
-- `0`: color fade from start/base RGB to end RGB
-- `1`: candle flicker. Base RGB is in `0x43` to `0x45`, hue variation is `0x46`, seed is `0x47`, and `0x48` is unused. Duration `0` runs until replaced.
+- `0`: color fade from start/base RGB to end RGB. Duration `0` applies the end color immediately.
+- `1`: persistent candle flicker. Base RGB is in `0x43` to `0x45`, hue variation is `0x46`, seed is `0x47`, and target intensity is `0x48`. Duration is the ramp time from current intensity to target intensity; duration `0` jumps immediately. Candle flicker runs until another pixel command replaces it.
 - `2`: lightning strike. Base RGB is restored after the strike, flash RGB is in `0x46` to `0x48`, and duration `0` uses the firmware default `850 ms`.
 
 Boot defaults from the RP2040 are `12V_B` enabled, `8V` enabled, all solenoids off, and all servos disabled.

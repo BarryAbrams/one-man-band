@@ -231,15 +231,19 @@
           <div class="pixel-layout">
             <section class="audio-card">
               <span class="tile-title">Pixel Rails</span>
-              <div class="rail-picker">
-                <template x-for="rail in meta.pixel_rails || []" :key="rail">
-                  <button
-                    class="pill-button"
-                    :class="pixels.rails.includes(rail) ? 'active' : ''"
-                    @click="togglePixelRail(rail)"
-                    x-text="`PIX ${rail}`"
-                  ></button>
-                </template>
+              <div class="pixel-target-row">
+                <label class="field-label" for="pixel-rail">
+                  Rail
+                  <select id="pixel-rail" x-model="pixels.rail" :disabled="pixels.all_rails">
+                    <template x-for="rail in meta.pixel_rails || []" :key="rail">
+                      <option :value="rail" x-text="`PIX ${rail}`"></option>
+                    </template>
+                  </select>
+                </label>
+                <label class="check-label">
+                  <input type="checkbox" x-model="pixels.all_rails">
+                  All rails
+                </label>
               </div>
               <div class="pixel-fields">
                 <label class="field-label" for="pixel-start">
@@ -251,7 +255,7 @@
                   <input id="pixel-count" type="number" min="0" max="100" x-model.number="pixels.count">
                 </label>
                 <label class="field-label" for="pixel-duration">
-                  Duration ms
+                  <span x-text="pixels.animation_id === 1 ? 'Ramp ms' : 'Duration ms'"></span>
                   <input id="pixel-duration" type="number" min="0" max="65535" x-model.number="pixels.duration_ms">
                 </label>
               </div>
@@ -282,7 +286,14 @@
                   Seed
                   <input id="pixel-seed" type="number" min="0" max="255" x-model.number="pixels.seed">
                 </label>
+                <label class="field-label" for="pixel-intensity" x-show="pixels.animation_id === 1">
+                  Target Intensity
+                  <input id="pixel-intensity" type="number" min="0" max="255" x-model.number="pixels.target_intensity">
+                </label>
               </div>
+              <p class="tile-subtitle panel-note" x-show="pixels.animation_id === 1">
+                Candle flicker stays active until another pixel command replaces it. Ramp ms changes intensity over time; 0 jumps immediately.
+              </p>
               <div class="pixel-preview" :class="{ candle: pixels.animation_id === 1, lightning: pixels.animation_id === 2 }" :style="pixelPreviewStyle()"></div>
               <div class="actions">
                 <button class="secondary" @click="sendPixelAnimation()" x-text="pixelSendLabel()"></button>
@@ -973,15 +984,19 @@
 
                     <template x-if="action.type === 'pixels_animate'">
                       <div>
-                        <div class="rail-picker logic-rails">
-                          <template x-for="rail in meta.pixel_rails || []" :key="rail">
-                            <button
-                              class="pill-button"
-                              :class="action.rails.includes(rail) ? 'active' : ''"
-                              @click="toggleActionPixelRail(action, rail)"
-                              x-text="`PIX ${rail}`"
-                            ></button>
-                          </template>
+                        <div class="logic-row">
+                          <label class="field-label">
+                            Rail
+                            <select x-model="action.rail" :disabled="action.all_rails">
+                              <template x-for="rail in meta.pixel_rails || []" :key="rail">
+                                <option :value="rail" x-text="`PIX ${rail}`"></option>
+                              </template>
+                            </select>
+                          </label>
+                          <label class="check-label">
+                            <input type="checkbox" x-model="action.all_rails">
+                            All rails
+                          </label>
                         </div>
                         <div class="logic-row">
                           <label class="field-label">
@@ -1001,7 +1016,7 @@
                             <input type="number" min="0" max="100" x-model.number="action.count">
                           </label>
                           <label class="field-label">
-                            Duration ms
+                            <span x-text="Number(action.animation_id || 0) === 1 ? 'Ramp ms' : 'Duration ms'"></span>
                             <input type="number" min="0" max="65535" x-model.number="action.duration_ms">
                           </label>
                         </div>
@@ -1021,6 +1036,10 @@
                           <label class="field-label" x-show="Number(action.animation_id || 0) === 1">
                             Seed
                             <input type="number" min="0" max="255" x-model.number="action.seed">
+                          </label>
+                          <label class="field-label" x-show="Number(action.animation_id || 0) === 1">
+                            Target Intensity
+                            <input type="number" min="0" max="255" x-model.number="action.target_intensity">
                           </label>
                         </div>
                       </div>
@@ -1210,15 +1229,19 @@
 
                     <template x-if="action.type === 'pixels_animate'">
                       <div>
-                        <div class="rail-picker logic-rails">
-                          <template x-for="rail in meta.pixel_rails || []" :key="rail">
-                            <button
-                              class="pill-button"
-                              :class="action.rails.includes(rail) ? 'active' : ''"
-                              @click="toggleActionPixelRail(action, rail)"
-                              x-text="`PIX ${rail}`"
-                            ></button>
-                          </template>
+                        <div class="logic-row">
+                          <label class="field-label">
+                            Rail
+                            <select x-model="action.rail" :disabled="action.all_rails">
+                              <template x-for="rail in meta.pixel_rails || []" :key="rail">
+                                <option :value="rail" x-text="`PIX ${rail}`"></option>
+                              </template>
+                            </select>
+                          </label>
+                          <label class="check-label">
+                            <input type="checkbox" x-model="action.all_rails">
+                            All rails
+                          </label>
                         </div>
                         <div class="logic-row">
                           <label class="field-label">
@@ -1238,7 +1261,7 @@
                             <input type="number" min="0" max="100" x-model.number="action.count">
                           </label>
                           <label class="field-label">
-                            Duration ms
+                            <span x-text="Number(action.animation_id || 0) === 1 ? 'Ramp ms' : 'Duration ms'"></span>
                             <input type="number" min="0" max="65535" x-model.number="action.duration_ms">
                           </label>
                         </div>
@@ -1258,6 +1281,10 @@
                           <label class="field-label" x-show="Number(action.animation_id || 0) === 1">
                             Seed
                             <input type="number" min="0" max="255" x-model.number="action.seed">
+                          </label>
+                          <label class="field-label" x-show="Number(action.animation_id || 0) === 1">
+                            Target Intensity
+                            <input type="number" min="0" max="255" x-model.number="action.target_intensity">
                           </label>
                         </div>
                       </div>
@@ -1371,7 +1398,8 @@
           servoEditing: {},
           activeTab: "power",
           pixels: {
-            rails: ["1", "2", "3", "4"],
+            rail: "1",
+            all_rails: false,
             start: 0,
             count: 0,
             animation_id: 0,
@@ -1379,6 +1407,7 @@
             end_color: "#0000ff",
             hue_variation: 32,
             seed: 17,
+            target_intensity: 255,
             duration_ms: 1000,
             message: "",
           },
@@ -2176,7 +2205,8 @@
             if (type === "pixels_animate") {
               return {
                 type,
-                rails: ["1"],
+                rail: "1",
+                all_rails: false,
                 start: 0,
                 count: 0,
                 animation_id: 0,
@@ -2184,6 +2214,7 @@
                 end_color: "#0000ff",
                 hue_variation: 32,
                 seed: 17,
+                target_intensity: 255,
                 duration_ms: 1000,
               };
             }
@@ -2240,12 +2271,16 @@
               normalized.timer_name = this.sanitizeTimerName(normalized.timer_name || "Timer1");
             }
             if (normalized.type === "pixels_animate") {
-              normalized.rails = normalized.rails || ["1"];
+              const rails = Array.isArray(normalized.rails) ? normalized.rails : [];
+              normalized.all_rails = Boolean(normalized.all_rails || rails.length > 1);
+              normalized.rail = normalized.rail || rails[0] || "1";
+              normalized.rails = normalized.all_rails ? (this.meta.pixel_rails || ["1", "2", "3", "4"]) : [normalized.rail];
               normalized.animation_id = Number(normalized.animation_id || 0);
               normalized.start_color = normalized.start_color || this.rgbToHex(normalized.start_rgb || [0, 0, 0]);
               normalized.end_color = normalized.end_color || this.rgbToHex(normalized.end_rgb || [0, 0, 255]);
               normalized.hue_variation = Number(normalized.hue_variation ?? normalized.end_rgb?.[0] ?? 32);
               normalized.seed = Number(normalized.seed ?? normalized.end_rgb?.[1] ?? 17);
+              normalized.target_intensity = Number(normalized.target_intensity ?? normalized.end_rgb?.[2] ?? 255);
             }
             return normalized;
           },
@@ -2303,11 +2338,9 @@
           },
 
           toggleActionPixelRail(action, rail) {
-            if (action.rails.includes(rail)) {
-              action.rails = action.rails.filter((item) => item !== rail);
-              return;
-            }
-            action.rails = [...action.rails, rail];
+            action.rail = rail;
+            action.all_rails = false;
+            action.rails = [rail];
           },
 
           toggleAudioPlaylistTrack(action, filename) {
@@ -2350,18 +2383,22 @@
               }
               if (payload.type === "pixels_animate") {
                 payload.animation_id = Number(payload.animation_id || 0);
+                payload.rails = payload.all_rails ? (this.meta.pixel_rails || ["1", "2", "3", "4"]) : [payload.rail || "1"];
                 payload.start_rgb = this.hexToRgb(payload.start_color || "#000000");
                 payload.end_rgb = payload.animation_id === 1
                   ? [
                       Math.max(0, Math.min(255, Number(payload.hue_variation) || 0)),
                       Math.max(0, Math.min(255, Number(payload.seed) || 0)),
-                      0,
+                      Math.max(0, Math.min(255, Number(payload.target_intensity) || 0)),
                     ]
                   : this.hexToRgb(payload.end_color || "#0000ff");
+                delete payload.rail;
+                delete payload.all_rails;
                 delete payload.start_color;
                 delete payload.end_color;
                 delete payload.hue_variation;
                 delete payload.seed;
+                delete payload.target_intensity;
               }
               return payload;
             });
@@ -2646,12 +2683,16 @@
             }
           },
 
-          togglePixelRail(rail) {
-            if (this.pixels.rails.includes(rail)) {
-              this.pixels.rails = this.pixels.rails.filter((item) => item !== rail);
-              return;
+          selectedPixelRails() {
+            if (this.pixels.all_rails) {
+              return this.meta.pixel_rails || ["1", "2", "3", "4"];
             }
-            this.pixels.rails = [...this.pixels.rails, rail];
+            return [this.pixels.rail || "1"];
+          },
+
+          togglePixelRail(rail) {
+            this.pixels.rail = rail;
+            this.pixels.all_rails = false;
           },
 
           pixelSendLabel() {
@@ -2684,11 +2725,11 @@
               ? [
                   Math.max(0, Math.min(255, Number(this.pixels.hue_variation) || 0)),
                   Math.max(0, Math.min(255, Number(this.pixels.seed) || 0)),
-                  0,
+                  Math.max(0, Math.min(255, Number(this.pixels.target_intensity) || 0)),
                 ]
               : this.hexToRgb(this.pixels.end_color);
             this.socket.emit("pixels:animate", {
-              rails: this.pixels.rails,
+              rails: this.selectedPixelRails(),
               start: this.pixels.start,
               count: this.pixels.count,
               start_rgb: this.hexToRgb(this.pixels.start_color),
@@ -2696,7 +2737,7 @@
               duration_ms: this.pixels.duration_ms,
               animation_id: animationId,
             });
-            this.pixels.message = `${this.pixelSendLabel()} command sent`;
+            this.pixels.message = `${this.pixelSendLabel()} command sent to ${this.pixels.all_rails ? "all rails" : `PIX ${this.pixels.rail}`}`;
           },
 
           sendPixelFade() {

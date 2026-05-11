@@ -178,7 +178,7 @@ class DeviceController:
         self._gpio_error = ""
         self._servo_value_cache: dict[int, int] = {}
         self._state = DeviceState(
-            version=1 if self._mock_mode else 0,
+            version=2 if self._mock_mode else 0,
             ina_presence=0b11 if self._mock_mode else 0,
             connected=self._mock_mode,
             backend="mock" if self._mock_mode else "i2c",
