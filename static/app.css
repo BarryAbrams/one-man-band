@@ -283,6 +283,7 @@ button:hover {
 }
 
 .rail-picker,
+.mode-picker,
 .pixel-fields,
 .color-grid {
   display: grid;
@@ -292,6 +293,10 @@ button:hover {
 
 .rail-picker {
   grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.mode-picker {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .pixel-fields,
@@ -336,6 +341,14 @@ button:hover {
   margin: 18px 0;
   border-radius: 18px;
   border: 1px solid rgba(78, 60, 33, 0.12);
+}
+
+.pixel-preview.candle {
+  background-size: 180% 100%;
+}
+
+.pixel-preview.lightning {
+  background-size: 36px 36px;
 }
 
 .input-tile {

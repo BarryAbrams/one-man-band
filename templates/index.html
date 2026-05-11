@@ -259,20 +259,33 @@
             </section>
 
             <section class="audio-card">
-              <span class="tile-title">Color Fade</span>
+              <span class="tile-title">Animation</span>
+              <div class="mode-picker">
+                <button class="pill-button" :class="pixels.animation_id === 0 ? 'active' : ''" @click="pixels.animation_id = 0">Fade</button>
+                <button class="pill-button" :class="pixels.animation_id === 1 ? 'active' : ''" @click="pixels.animation_id = 1">Candle</button>
+                <button class="pill-button" :class="pixels.animation_id === 2 ? 'active' : ''" @click="pixels.animation_id = 2">Lightning</button>
+              </div>
               <div class="color-grid">
                 <label class="field-label" for="pixel-start-color">
-                  From
+                  <span x-text="pixels.animation_id === 0 ? 'From' : 'Base'"></span>
                   <input id="pixel-start-color" type="color" x-model="pixels.start_color">
                 </label>
-                <label class="field-label" for="pixel-end-color">
+                <label class="field-label" for="pixel-end-color" x-show="pixels.animation_id !== 1">
                   To
                   <input id="pixel-end-color" type="color" x-model="pixels.end_color">
                 </label>
+                <label class="field-label" for="pixel-hue-variation" x-show="pixels.animation_id === 1">
+                  Hue Variation
+                  <input id="pixel-hue-variation" type="number" min="0" max="255" x-model.number="pixels.hue_variation">
+                </label>
+                <label class="field-label" for="pixel-seed" x-show="pixels.animation_id === 1">
+                  Seed
+                  <input id="pixel-seed" type="number" min="0" max="255" x-model.number="pixels.seed">
+                </label>
               </div>
-              <div class="pixel-preview" :style="`background: linear-gradient(90deg, ${pixels.start_color}, ${pixels.end_color})`"></div>
+              <div class="pixel-preview" :class="{ candle: pixels.animation_id === 1, lightning: pixels.animation_id === 2 }" :style="pixelPreviewStyle()"></div>
               <div class="actions">
-                <button class="secondary" @click="sendPixelFade()">Send Fade</button>
+                <button class="secondary" @click="sendPixelAnimation()" x-text="pixelSendLabel()"></button>
                 <button class="secondary" @click="blackoutPixels()">Blackout</button>
               </div>
               <template x-if="pixels.message">
@@ -972,6 +985,14 @@
                         </div>
                         <div class="logic-row">
                           <label class="field-label">
+                            Animation
+                            <select x-model.number="action.animation_id">
+                              <option :value="0">Color fade</option>
+                              <option :value="1">Candle flicker</option>
+                              <option :value="2">Lightning strike</option>
+                            </select>
+                          </label>
+                          <label class="field-label">
                             Start
                             <input type="number" min="0" max="99" x-model.number="action.start">
                           </label>
@@ -986,12 +1007,20 @@
                         </div>
                         <div class="logic-row">
                           <label class="field-label">
-                            From
+                            <span x-text="Number(action.animation_id || 0) === 0 ? 'From' : 'Base'"></span>
                             <input type="color" x-model="action.start_color">
                           </label>
-                          <label class="field-label">
+                          <label class="field-label" x-show="Number(action.animation_id || 0) !== 1">
                             To
                             <input type="color" x-model="action.end_color">
+                          </label>
+                          <label class="field-label" x-show="Number(action.animation_id || 0) === 1">
+                            Hue Variation
+                            <input type="number" min="0" max="255" x-model.number="action.hue_variation">
+                          </label>
+                          <label class="field-label" x-show="Number(action.animation_id || 0) === 1">
+                            Seed
+                            <input type="number" min="0" max="255" x-model.number="action.seed">
                           </label>
                         </div>
                       </div>
@@ -1193,6 +1222,14 @@
                         </div>
                         <div class="logic-row">
                           <label class="field-label">
+                            Animation
+                            <select x-model.number="action.animation_id">
+                              <option :value="0">Color fade</option>
+                              <option :value="1">Candle flicker</option>
+                              <option :value="2">Lightning strike</option>
+                            </select>
+                          </label>
+                          <label class="field-label">
                             Start
                             <input type="number" min="0" max="99" x-model.number="action.start">
                           </label>
@@ -1207,12 +1244,20 @@
                         </div>
                         <div class="logic-row">
                           <label class="field-label">
-                            From
+                            <span x-text="Number(action.animation_id || 0) === 0 ? 'From' : 'Base'"></span>
                             <input type="color" x-model="action.start_color">
                           </label>
-                          <label class="field-label">
+                          <label class="field-label" x-show="Number(action.animation_id || 0) !== 1">
                             To
                             <input type="color" x-model="action.end_color">
+                          </label>
+                          <label class="field-label" x-show="Number(action.animation_id || 0) === 1">
+                            Hue Variation
+                            <input type="number" min="0" max="255" x-model.number="action.hue_variation">
+                          </label>
+                          <label class="field-label" x-show="Number(action.animation_id || 0) === 1">
+                            Seed
+                            <input type="number" min="0" max="255" x-model.number="action.seed">
                           </label>
                         </div>
                       </div>
@@ -1329,8 +1374,11 @@
             rails: ["1", "2", "3", "4"],
             start: 0,
             count: 0,
+            animation_id: 0,
             start_color: "#000000",
             end_color: "#0000ff",
+            hue_variation: 32,
+            seed: 17,
             duration_ms: 1000,
             message: "",
           },
@@ -2131,8 +2179,11 @@
                 rails: ["1"],
                 start: 0,
                 count: 0,
+                animation_id: 0,
                 start_color: "#000000",
                 end_color: "#0000ff",
+                hue_variation: 32,
+                seed: 17,
                 duration_ms: 1000,
               };
             }
@@ -2190,8 +2241,11 @@
             }
             if (normalized.type === "pixels_animate") {
               normalized.rails = normalized.rails || ["1"];
+              normalized.animation_id = Number(normalized.animation_id || 0);
               normalized.start_color = normalized.start_color || this.rgbToHex(normalized.start_rgb || [0, 0, 0]);
               normalized.end_color = normalized.end_color || this.rgbToHex(normalized.end_rgb || [0, 0, 255]);
+              normalized.hue_variation = Number(normalized.hue_variation ?? normalized.end_rgb?.[0] ?? 32);
+              normalized.seed = Number(normalized.seed ?? normalized.end_rgb?.[1] ?? 17);
             }
             return normalized;
           },
@@ -2295,10 +2349,19 @@
                 payload.enable = this.logicBool(payload.enable);
               }
               if (payload.type === "pixels_animate") {
+                payload.animation_id = Number(payload.animation_id || 0);
                 payload.start_rgb = this.hexToRgb(payload.start_color || "#000000");
-                payload.end_rgb = this.hexToRgb(payload.end_color || "#0000ff");
+                payload.end_rgb = payload.animation_id === 1
+                  ? [
+                      Math.max(0, Math.min(255, Number(payload.hue_variation) || 0)),
+                      Math.max(0, Math.min(255, Number(payload.seed) || 0)),
+                      0,
+                    ]
+                  : this.hexToRgb(payload.end_color || "#0000ff");
                 delete payload.start_color;
                 delete payload.end_color;
+                delete payload.hue_variation;
+                delete payload.seed;
               }
               return payload;
             });
@@ -2591,28 +2654,62 @@
             this.pixels.rails = [...this.pixels.rails, rail];
           },
 
-          sendPixelFade() {
+          pixelSendLabel() {
+            if (this.pixels.animation_id === 1) {
+              return "Start Candle";
+            }
+            if (this.pixels.animation_id === 2) {
+              return "Strike Lightning";
+            }
+            return "Send Fade";
+          },
+
+          pixelPreviewStyle() {
+            if (this.pixels.animation_id === 1) {
+              return `background: linear-gradient(90deg, ${this.pixels.start_color}, #ffd46b, ${this.pixels.start_color})`;
+            }
+            if (this.pixels.animation_id === 2) {
+              return `background: linear-gradient(90deg, ${this.pixels.start_color}, ${this.pixels.end_color}, ${this.pixels.start_color})`;
+            }
+            return `background: linear-gradient(90deg, ${this.pixels.start_color}, ${this.pixels.end_color})`;
+          },
+
+          sendPixelAnimation() {
             if (!this.socketConnected || !this.socket) {
               this.pixels.message = "Socket is not connected";
               return;
             }
+            const animationId = Number(this.pixels.animation_id || 0);
+            const paramRgb = animationId === 1
+              ? [
+                  Math.max(0, Math.min(255, Number(this.pixels.hue_variation) || 0)),
+                  Math.max(0, Math.min(255, Number(this.pixels.seed) || 0)),
+                  0,
+                ]
+              : this.hexToRgb(this.pixels.end_color);
             this.socket.emit("pixels:animate", {
               rails: this.pixels.rails,
               start: this.pixels.start,
               count: this.pixels.count,
               start_rgb: this.hexToRgb(this.pixels.start_color),
-              end_rgb: this.hexToRgb(this.pixels.end_color),
+              end_rgb: paramRgb,
               duration_ms: this.pixels.duration_ms,
-              animation_id: 0,
+              animation_id: animationId,
             });
-            this.pixels.message = "Fade command sent";
+            this.pixels.message = `${this.pixelSendLabel()} command sent`;
+          },
+
+          sendPixelFade() {
+            this.pixels.animation_id = 0;
+            this.sendPixelAnimation();
           },
 
           blackoutPixels() {
+            this.pixels.animation_id = 0;
             this.pixels.start_color = "#000000";
             this.pixels.end_color = "#000000";
             this.pixels.duration_ms = 250;
-            this.sendPixelFade();
+            this.sendPixelAnimation();
           },
 
           async loadAudioLibrary() {

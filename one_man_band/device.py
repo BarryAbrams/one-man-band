@@ -32,6 +32,10 @@ REG_INA1_VOLTAGE_L: Final[int] = 0x24
 REG_INA1_CURRENT_L: Final[int] = 0x26
 REG_PIXEL_COMMAND: Final[int] = 0x40
 
+PIXEL_ANIMATION_FADE: Final[int] = 0
+PIXEL_ANIMATION_CANDLE_FLICKER: Final[int] = 1
+PIXEL_ANIMATION_LIGHTNING_STRIKE: Final[int] = 2
+
 RAILS: Final[dict[str, int]] = {
     "12V_A": 1 << 0,
     "12V_B": 1 << 1,
@@ -87,6 +91,21 @@ PIXEL_RAILS: Final[dict[str, int]] = {
     "2": 1 << 1,
     "3": 1 << 2,
     "4": 1 << 3,
+}
+
+PIXEL_ANIMATIONS: Final[dict[str, dict[str, object]]] = {
+    "fade": {
+        "id": PIXEL_ANIMATION_FADE,
+        "label": "Color Fade",
+    },
+    "candle": {
+        "id": PIXEL_ANIMATION_CANDLE_FLICKER,
+        "label": "Candle Flicker",
+    },
+    "lightning": {
+        "id": PIXEL_ANIMATION_LIGHTNING_STRIKE,
+        "label": "Lightning Strike",
+    },
 }
 
 
@@ -474,9 +493,13 @@ class DeviceController:
             raise ValueError(f"Pixel count must be between 0 and 100: {count}")
         if not 0 <= duration_ms <= 65535:
             raise ValueError(f"Duration must be between 0 and 65535 ms: {duration_ms}")
-        if not 0 <= animation_id <= 255:
-            raise ValueError(f"Animation ID must be between 0 and 255: {animation_id}")
-        for channel_name, rgb in (("start", start_rgb), ("end", end_rgb)):
+        if animation_id not in {
+            PIXEL_ANIMATION_FADE,
+            PIXEL_ANIMATION_CANDLE_FLICKER,
+            PIXEL_ANIMATION_LIGHTNING_STRIKE,
+        }:
+            raise ValueError(f"Unknown pixel animation ID: {animation_id}")
+        for channel_name, rgb in (("base", start_rgb), ("parameter", end_rgb)):
             if len(rgb) != 3:
                 raise ValueError(f"{channel_name} color must have red, green, and blue values")
             if any(value < 0 or value > 255 for value in rgb):
@@ -553,11 +576,20 @@ class DeviceController:
             ],
             "start": start,
             "count": count,
+            "base_rgb": list(start_rgb),
+            "param_rgb": list(end_rgb),
             "start_rgb": list(start_rgb),
             "end_rgb": list(end_rgb),
             "duration_ms": duration_ms,
             "animation_id": animation_id,
+            "animation_name": self._pixel_animation_name(animation_id),
         }
+
+    def _pixel_animation_name(self, animation_id: int) -> str:
+        for name, config in PIXEL_ANIMATIONS.items():
+            if int(config["id"]) == animation_id:
+                return name
+        return "unknown"
 
     def metadata(self) -> dict[str, object]:
         return {
@@ -565,6 +597,7 @@ class DeviceController:
             "solenoids": list(SOLENOIDS.keys()),
             "servos": list(SERVO_CHANNELS),
             "pixel_rails": list(PIXEL_RAILS.keys()),
+            "pixel_animations": PIXEL_ANIMATIONS,
             "ina_channels": {
                 name: {
                     "title": str(config["title"]),
