@@ -841,6 +841,9 @@
                             <optgroup label="Neopixels">
                               <option value="pixels_animate">Neopixel actions</option>
                             </optgroup>
+                            <optgroup label="DMX">
+                              <option value="dmx_fade">Request DMX Fade</option>
+                            </optgroup>
                             <optgroup label="System">
                               <option value="timer_set">Timer: Start Timer</option>
                               <option value="timer_end">Timer: End Timer</option>
@@ -1044,6 +1047,71 @@
                         </div>
                       </div>
                     </template>
+
+                    <template x-if="action.type === 'dmx_fade'">
+                      <div>
+                        <div class="logic-row">
+                          <label class="field-label">
+                            Broker Host
+                            <input type="text" x-model="action.broker_host">
+                          </label>
+                          <label class="field-label">
+                            Broker Port
+                            <input type="number" min="1" max="65535" x-model.number="action.broker_port">
+                          </label>
+                          <label class="field-label">
+                            Fixture Group Slug
+                            <input type="text" x-model="action.fixture_group_slug">
+                          </label>
+                        </div>
+                        <div class="logic-row">
+                          <label class="field-label">
+                            State
+                            <select x-model="action.state">
+                              <option value="off">Off</option>
+                              <option value="on">On</option>
+                            </select>
+                          </label>
+                          <label class="field-label">
+                            Brightness
+                            <input type="text" placeholder="default or 0-255" x-model="action.brightness">
+                          </label>
+                          <label class="field-label">
+                            Color
+                            <input type="text" placeholder="default or #RRGGBB" x-model="action.color">
+                          </label>
+                          <label class="field-label">
+                            Duration ms
+                            <input type="number" min="0" x-model.number="action.duration_ms">
+                          </label>
+                        </div>
+                        <div class="logic-row">
+                          <label class="field-label">
+                            Restore After ms
+                            <input type="number" min="0" x-model.number="action.restore_after_ms">
+                          </label>
+                          <label class="field-label">
+                            Restore State
+                            <select x-model="action.restore_state">
+                              <option value="on">On</option>
+                              <option value="off">Off</option>
+                            </select>
+                          </label>
+                          <label class="field-label">
+                            Restore Brightness
+                            <input type="text" placeholder="default or 0-255" x-model="action.restore_brightness">
+                          </label>
+                          <label class="field-label">
+                            Restore Color
+                            <input type="text" placeholder="default or #RRGGBB" x-model="action.restore_color">
+                          </label>
+                          <label class="field-label">
+                            Restore Duration ms
+                            <input type="number" min="0" x-model.number="action.restore_duration_ms">
+                          </label>
+                        </div>
+                      </div>
+                    </template>
                     </section>
                   </div>
                 </template>
@@ -1085,6 +1153,9 @@
                             </optgroup>
                             <optgroup label="Neopixels">
                               <option value="pixels_animate">Neopixel actions</option>
+                            </optgroup>
+                            <optgroup label="DMX">
+                              <option value="dmx_fade">Request DMX Fade</option>
                             </optgroup>
                             <optgroup label="System">
                               <option value="timer_set">Timer: Start Timer</option>
@@ -1285,6 +1356,71 @@
                           <label class="field-label" x-show="Number(action.animation_id || 0) === 1">
                             Target Intensity
                             <input type="number" min="0" max="255" x-model.number="action.target_intensity">
+                          </label>
+                        </div>
+                      </div>
+                    </template>
+
+                    <template x-if="action.type === 'dmx_fade'">
+                      <div>
+                        <div class="logic-row">
+                          <label class="field-label">
+                            Broker Host
+                            <input type="text" x-model="action.broker_host">
+                          </label>
+                          <label class="field-label">
+                            Broker Port
+                            <input type="number" min="1" max="65535" x-model.number="action.broker_port">
+                          </label>
+                          <label class="field-label">
+                            Fixture Group Slug
+                            <input type="text" x-model="action.fixture_group_slug">
+                          </label>
+                        </div>
+                        <div class="logic-row">
+                          <label class="field-label">
+                            State
+                            <select x-model="action.state">
+                              <option value="off">Off</option>
+                              <option value="on">On</option>
+                            </select>
+                          </label>
+                          <label class="field-label">
+                            Brightness
+                            <input type="text" placeholder="default or 0-255" x-model="action.brightness">
+                          </label>
+                          <label class="field-label">
+                            Color
+                            <input type="text" placeholder="default or #RRGGBB" x-model="action.color">
+                          </label>
+                          <label class="field-label">
+                            Duration ms
+                            <input type="number" min="0" x-model.number="action.duration_ms">
+                          </label>
+                        </div>
+                        <div class="logic-row">
+                          <label class="field-label">
+                            Restore After ms
+                            <input type="number" min="0" x-model.number="action.restore_after_ms">
+                          </label>
+                          <label class="field-label">
+                            Restore State
+                            <select x-model="action.restore_state">
+                              <option value="on">On</option>
+                              <option value="off">Off</option>
+                            </select>
+                          </label>
+                          <label class="field-label">
+                            Restore Brightness
+                            <input type="text" placeholder="default or 0-255" x-model="action.restore_brightness">
+                          </label>
+                          <label class="field-label">
+                            Restore Color
+                            <input type="text" placeholder="default or #RRGGBB" x-model="action.restore_color">
+                          </label>
+                          <label class="field-label">
+                            Restore Duration ms
+                            <input type="number" min="0" x-model.number="action.restore_duration_ms">
                           </label>
                         </div>
                       </div>
@@ -2218,6 +2354,23 @@
                 duration_ms: 1000,
               };
             }
+            if (type === "dmx_fade") {
+              return {
+                type,
+                broker_host: "192.168.0.153",
+                broker_port: 1883,
+                fixture_group_slug: "bar-dragon",
+                state: "off",
+                brightness: 0,
+                color: "default",
+                duration_ms: 1000,
+                restore_after_ms: 10000,
+                restore_state: "on",
+                restore_brightness: "default",
+                restore_color: "default",
+                restore_duration_ms: 1000,
+              };
+            }
             return { type: "" };
           },
 
@@ -2281,6 +2434,20 @@
               normalized.hue_variation = Number(normalized.hue_variation ?? normalized.end_rgb?.[0] ?? 32);
               normalized.seed = Number(normalized.seed ?? normalized.end_rgb?.[1] ?? 17);
               normalized.target_intensity = Number(normalized.target_intensity ?? normalized.end_rgb?.[2] ?? 255);
+            }
+            if (normalized.type === "dmx_fade") {
+              normalized.broker_host = String(normalized.broker_host || "192.168.0.153").trim();
+              normalized.broker_port = Number(normalized.broker_port || 1883);
+              normalized.fixture_group_slug = String(normalized.fixture_group_slug || "bar-dragon").trim();
+              normalized.state = normalized.state || "off";
+              normalized.brightness = normalized.brightness ?? 0;
+              normalized.color = normalized.color || "default";
+              normalized.duration_ms = Number(normalized.duration_ms || 1000);
+              normalized.restore_after_ms = Number(normalized.restore_after_ms || 0);
+              normalized.restore_state = normalized.restore_state || "on";
+              normalized.restore_brightness = normalized.restore_brightness ?? "default";
+              normalized.restore_color = normalized.restore_color || "default";
+              normalized.restore_duration_ms = Number(normalized.restore_duration_ms || normalized.duration_ms || 1000);
             }
             return normalized;
           },
@@ -2399,6 +2566,20 @@
                 delete payload.hue_variation;
                 delete payload.seed;
                 delete payload.target_intensity;
+              }
+              if (payload.type === "dmx_fade") {
+                payload.broker_host = String(payload.broker_host || "192.168.0.153").trim();
+                payload.broker_port = Math.max(1, Math.min(65535, Number(payload.broker_port) || 1883));
+                payload.fixture_group_slug = String(payload.fixture_group_slug || "bar-dragon").trim();
+                payload.state = payload.state === "off" ? "off" : "on";
+                payload.brightness = this.dmxValue(payload.brightness, 0);
+                payload.color = String(payload.color || "default").trim() || "default";
+                payload.duration_ms = Math.max(0, Number(payload.duration_ms) || 0);
+                payload.restore_after_ms = Math.max(0, Number(payload.restore_after_ms) || 0);
+                payload.restore_state = payload.restore_state === "off" ? "off" : "on";
+                payload.restore_brightness = this.dmxValue(payload.restore_brightness, "default");
+                payload.restore_color = String(payload.restore_color || "default").trim() || "default";
+                payload.restore_duration_ms = Math.max(0, Number(payload.restore_duration_ms) || 0);
               }
               return payload;
             });
@@ -2519,6 +2700,16 @@
               return !["0", "false", "low", "off", "no"].includes(value.toLowerCase());
             }
             return Boolean(value);
+          },
+
+          dmxValue(value, fallback = "default") {
+            if (value === null || value === undefined || value === "") {
+              return fallback;
+            }
+            if (String(value).trim().toLowerCase() === "default") {
+              return "default";
+            }
+            return Math.max(0, Math.min(255, Number(value) || 0));
           },
 
           isTimerCause(type) {
@@ -2688,11 +2879,6 @@
               return this.meta.pixel_rails || ["1", "2", "3", "4"];
             }
             return [this.pixels.rail || "1"];
-          },
-
-          togglePixelRail(rail) {
-            this.pixels.rail = rail;
-            this.pixels.all_rails = false;
           },
 
           pixelSendLabel() {

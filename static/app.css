@@ -520,10 +520,6 @@ button:hover {
   accent-color: var(--accent);
 }
 
-.logic-rails {
-  margin: 0 0 12px;
-}
-
 .track-picker {
   display: grid;
   gap: 8px;
@@ -819,6 +815,10 @@ button:hover {
 
 .action-audio {
   border-left-color: #5d6fb7;
+}
+
+.action-dmx {
+  border-left-color: #2f8a9f;
 }
 
 .action-toast-label {

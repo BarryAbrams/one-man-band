@@ -5,11 +5,17 @@ import re
 import sqlite3
 import threading
 import time
+import socket
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 from .device import DeviceController
+
+try:
+    from paho.mqtt import publish as mqtt_publish
+except ImportError:  # pragma: no cover - depends on deployment extras
+    mqtt_publish = None
 
 if TYPE_CHECKING:
     from .audio import AudioManager
@@ -17,6 +23,8 @@ if TYPE_CHECKING:
 
 ActionCallback = Callable[[], None]
 TIMER_NAME_RE = re.compile(r"^[A-Za-z0-9]+$")
+DMX_FADE_TOPIC = "parcadia/to_gmmy/dmx_fade"
+DEFAULT_DMX_BROKER_HOST = "192.168.0.153"
 
 
 @dataclass(slots=True)
@@ -257,6 +265,7 @@ class LogicEngine:
                 "solenoid_pulse",
                 "servo_set",
                 "pixels_animate",
+                "dmx_fade",
             ],
         }
 
@@ -616,11 +625,99 @@ class LogicEngine:
                 animation_id=int(action.get("animation_id", 0)),
             )
             self._record_action_event("pixels", "Neopixels", f"Rails {', '.join(str(rail) for rail in rails)}")
+        elif action_type == "dmx_fade":
+            self._request_dmx_fade(action, rule_id, branch, index)
 
     def _finish_solenoid_pulse(self, name: str) -> None:
         self._controller.set_solenoid(name, False)
         if self._on_action:
             self._on_action()
+
+    def _request_dmx_fade(
+        self, action: dict[str, Any], rule_id: int, branch: str, index: int
+    ) -> None:
+        broker_host = str(action.get("broker_host") or DEFAULT_DMX_BROKER_HOST).strip()
+        broker_port = max(1, min(65535, int(action.get("broker_port", 1883))))
+        payload = self._dmx_payload(action, rule_id, branch, index)
+        if not self._publish_dmx_fade(broker_host, broker_port, payload):
+            return
+
+        target = payload.get("fixture_group_slug") or payload.get("fixture_slug") or "fixture"
+        self._record_action_event("dmx", "DMX fade", f"{target} {payload.get('state', 'on')}")
+
+        restore_after_ms = max(0, int(action.get("restore_after_ms", 0) or 0))
+        if restore_after_ms <= 0:
+            return
+        restore_payload = {
+            **payload,
+            "duration_ms": max(0, int(action.get("restore_duration_ms", payload.get("duration_ms", 0)) or 0)),
+            "state": str(action.get("restore_state") or "on"),
+        }
+        restore_brightness = action.get("restore_brightness", "default")
+        if restore_brightness == "default":
+            restore_payload["brightness"] = "default"
+        else:
+            restore_payload["brightness"] = max(0, min(255, int(restore_brightness)))
+        restore_color = str(action.get("restore_color") or "default").strip()
+        restore_payload["color"] = restore_color or "default"
+
+        timer = threading.Timer(
+            restore_after_ms / 1000,
+            self._publish_dmx_restore,
+            args=(broker_host, broker_port, restore_payload),
+        )
+        timer.daemon = True
+        timer.start()
+
+    def _publish_dmx_restore(
+        self, broker_host: str, broker_port: int, payload: dict[str, Any]
+    ) -> None:
+        if self._publish_dmx_fade(broker_host, broker_port, payload):
+            target = payload.get("fixture_group_slug") or payload.get("fixture_slug") or "fixture"
+            self._record_action_event("dmx", "DMX restore", f"{target} {payload.get('state', 'on')}")
+        if self._on_action:
+            self._on_action()
+
+    def _dmx_payload(
+        self, action: dict[str, Any], rule_id: int, branch: str, index: int
+    ) -> dict[str, Any]:
+        fixture_group_slug = str(action.get("fixture_group_slug") or "").strip()
+        if not fixture_group_slug:
+            raise ValueError("DMX action requires a fixture group slug")
+
+        payload: dict[str, Any] = {
+            "hostname": socket.gethostname(),
+            "source": f"one_man_band.logic_rule_{rule_id}.{branch}_{index}",
+            "fixture_group_slug": fixture_group_slug,
+            "duration_ms": max(0, int(action.get("duration_ms", 1000) or 0)),
+            "state": str(action.get("state") or "on"),
+        }
+        brightness = action.get("brightness", "default")
+        if brightness == "default":
+            payload["brightness"] = "default"
+        else:
+            payload["brightness"] = max(0, min(255, int(brightness)))
+        color = str(action.get("color") or "default").strip()
+        payload["color"] = color or "default"
+        return payload
+
+    def _publish_dmx_fade(
+        self, broker_host: str, broker_port: int, payload: dict[str, Any]
+    ) -> bool:
+        if mqtt_publish is None:
+            self._record_action_event("dmx", "DMX failed", "Install paho-mqtt")
+            return False
+        try:
+            mqtt_publish.single(
+                DMX_FADE_TOPIC,
+                payload=json.dumps(payload, sort_keys=True),
+                hostname=broker_host,
+                port=broker_port,
+            )
+        except Exception as exc:
+            self._record_action_event("dmx", "DMX failed", f"{broker_host}: {exc}")
+            return False
+        return True
 
     def _rgb(self, value: Any, default: list[int]) -> tuple[int, int, int]:
         if not isinstance(value, list) or len(value) != 3:
