@@ -1052,14 +1052,6 @@
                       <div>
                         <div class="logic-row">
                           <label class="field-label">
-                            Broker Host
-                            <input type="text" x-model="action.broker_host">
-                          </label>
-                          <label class="field-label">
-                            Broker Port
-                            <input type="number" min="1" max="65535" x-model.number="action.broker_port">
-                          </label>
-                          <label class="field-label">
                             Fixture Group Slug
                             <input type="text" x-model="action.fixture_group_slug">
                           </label>
@@ -1084,30 +1076,9 @@
                             Duration ms
                             <input type="number" min="0" x-model.number="action.duration_ms">
                           </label>
-                        </div>
-                        <div class="logic-row">
                           <label class="field-label">
-                            Restore After ms
-                            <input type="number" min="0" x-model.number="action.restore_after_ms">
-                          </label>
-                          <label class="field-label">
-                            Restore State
-                            <select x-model="action.restore_state">
-                              <option value="on">On</option>
-                              <option value="off">Off</option>
-                            </select>
-                          </label>
-                          <label class="field-label">
-                            Restore Brightness
-                            <input type="text" placeholder="default or 0-255" x-model="action.restore_brightness">
-                          </label>
-                          <label class="field-label">
-                            Restore Color
-                            <input type="text" placeholder="default or #RRGGBB" x-model="action.restore_color">
-                          </label>
-                          <label class="field-label">
-                            Restore Duration ms
-                            <input type="number" min="0" x-model.number="action.restore_duration_ms">
+                            Delay ms
+                            <input type="number" min="0" x-model.number="action.delay_ms">
                           </label>
                         </div>
                       </div>
@@ -1365,14 +1336,6 @@
                       <div>
                         <div class="logic-row">
                           <label class="field-label">
-                            Broker Host
-                            <input type="text" x-model="action.broker_host">
-                          </label>
-                          <label class="field-label">
-                            Broker Port
-                            <input type="number" min="1" max="65535" x-model.number="action.broker_port">
-                          </label>
-                          <label class="field-label">
                             Fixture Group Slug
                             <input type="text" x-model="action.fixture_group_slug">
                           </label>
@@ -1397,30 +1360,9 @@
                             Duration ms
                             <input type="number" min="0" x-model.number="action.duration_ms">
                           </label>
-                        </div>
-                        <div class="logic-row">
                           <label class="field-label">
-                            Restore After ms
-                            <input type="number" min="0" x-model.number="action.restore_after_ms">
-                          </label>
-                          <label class="field-label">
-                            Restore State
-                            <select x-model="action.restore_state">
-                              <option value="on">On</option>
-                              <option value="off">Off</option>
-                            </select>
-                          </label>
-                          <label class="field-label">
-                            Restore Brightness
-                            <input type="text" placeholder="default or 0-255" x-model="action.restore_brightness">
-                          </label>
-                          <label class="field-label">
-                            Restore Color
-                            <input type="text" placeholder="default or #RRGGBB" x-model="action.restore_color">
-                          </label>
-                          <label class="field-label">
-                            Restore Duration ms
-                            <input type="number" min="0" x-model.number="action.restore_duration_ms">
+                            Delay ms
+                            <input type="number" min="0" x-model.number="action.delay_ms">
                           </label>
                         </div>
                       </div>
@@ -2357,18 +2299,12 @@
             if (type === "dmx_fade") {
               return {
                 type,
-                broker_host: "192.168.0.153",
-                broker_port: 1883,
                 fixture_group_slug: "bar-dragon",
                 state: "off",
                 brightness: 0,
                 color: "default",
                 duration_ms: 1000,
-                restore_after_ms: 10000,
-                restore_state: "on",
-                restore_brightness: "default",
-                restore_color: "default",
-                restore_duration_ms: 1000,
+                delay_ms: 0,
               };
             }
             return { type: "" };
@@ -2436,18 +2372,12 @@
               normalized.target_intensity = Number(normalized.target_intensity ?? normalized.end_rgb?.[2] ?? 255);
             }
             if (normalized.type === "dmx_fade") {
-              normalized.broker_host = String(normalized.broker_host || "192.168.0.153").trim();
-              normalized.broker_port = Number(normalized.broker_port || 1883);
               normalized.fixture_group_slug = String(normalized.fixture_group_slug || "bar-dragon").trim();
               normalized.state = normalized.state || "off";
               normalized.brightness = normalized.brightness ?? 0;
               normalized.color = normalized.color || "default";
               normalized.duration_ms = Number(normalized.duration_ms || 1000);
-              normalized.restore_after_ms = Number(normalized.restore_after_ms || 0);
-              normalized.restore_state = normalized.restore_state || "on";
-              normalized.restore_brightness = normalized.restore_brightness ?? "default";
-              normalized.restore_color = normalized.restore_color || "default";
-              normalized.restore_duration_ms = Number(normalized.restore_duration_ms || normalized.duration_ms || 1000);
+              normalized.delay_ms = Number(normalized.delay_ms || 0);
             }
             return normalized;
           },
@@ -2568,18 +2498,19 @@
                 delete payload.target_intensity;
               }
               if (payload.type === "dmx_fade") {
-                payload.broker_host = String(payload.broker_host || "192.168.0.153").trim();
-                payload.broker_port = Math.max(1, Math.min(65535, Number(payload.broker_port) || 1883));
                 payload.fixture_group_slug = String(payload.fixture_group_slug || "bar-dragon").trim();
                 payload.state = payload.state === "off" ? "off" : "on";
                 payload.brightness = this.dmxValue(payload.brightness, 0);
                 payload.color = String(payload.color || "default").trim() || "default";
                 payload.duration_ms = Math.max(0, Number(payload.duration_ms) || 0);
-                payload.restore_after_ms = Math.max(0, Number(payload.restore_after_ms) || 0);
-                payload.restore_state = payload.restore_state === "off" ? "off" : "on";
-                payload.restore_brightness = this.dmxValue(payload.restore_brightness, "default");
-                payload.restore_color = String(payload.restore_color || "default").trim() || "default";
-                payload.restore_duration_ms = Math.max(0, Number(payload.restore_duration_ms) || 0);
+                payload.delay_ms = Math.max(0, Number(payload.delay_ms) || 0);
+                delete payload.restore_after_ms;
+                delete payload.restore_state;
+                delete payload.restore_brightness;
+                delete payload.restore_color;
+                delete payload.restore_duration_ms;
+                delete payload.broker_host;
+                delete payload.broker_port;
               }
               return payload;
             });

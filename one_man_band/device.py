@@ -591,6 +591,12 @@ class DeviceController:
                 return name
         return "unknown"
 
+    def close(self) -> None:
+        with self._lock:
+            if GPIO is not None and self._gpio_ready:
+                GPIO.cleanup()
+            self._gpio_ready = False
+
     def metadata(self) -> dict[str, object]:
         return {
             "rails": list(RAILS.keys()),

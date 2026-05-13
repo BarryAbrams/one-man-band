@@ -25,6 +25,7 @@ ActionCallback = Callable[[], None]
 TIMER_NAME_RE = re.compile(r"^[A-Za-z0-9]+$")
 DMX_FADE_TOPIC = "parcadia/to_gmmy/dmx_fade"
 DEFAULT_DMX_BROKER_HOST = "192.168.0.153"
+DEFAULT_DMX_BROKER_PORT = 1883
 
 
 @dataclass(slots=True)
@@ -636,45 +637,24 @@ class LogicEngine:
     def _request_dmx_fade(
         self, action: dict[str, Any], rule_id: int, branch: str, index: int
     ) -> None:
-        broker_host = str(action.get("broker_host") or DEFAULT_DMX_BROKER_HOST).strip()
-        broker_port = max(1, min(65535, int(action.get("broker_port", 1883))))
         payload = self._dmx_payload(action, rule_id, branch, index)
-        if not self._publish_dmx_fade(broker_host, broker_port, payload):
+        delay_ms = max(0, int(action.get("delay_ms", 0) or 0))
+        if delay_ms <= 0:
+            self._publish_dmx_request(payload)
             return
-
-        target = payload.get("fixture_group_slug") or payload.get("fixture_slug") or "fixture"
-        self._record_action_event("dmx", "DMX fade", f"{target} {payload.get('state', 'on')}")
-
-        restore_after_ms = max(0, int(action.get("restore_after_ms", 0) or 0))
-        if restore_after_ms <= 0:
-            return
-        restore_payload = {
-            **payload,
-            "duration_ms": max(0, int(action.get("restore_duration_ms", payload.get("duration_ms", 0)) or 0)),
-            "state": str(action.get("restore_state") or "on"),
-        }
-        restore_brightness = action.get("restore_brightness", "default")
-        if restore_brightness == "default":
-            restore_payload["brightness"] = "default"
-        else:
-            restore_payload["brightness"] = max(0, min(255, int(restore_brightness)))
-        restore_color = str(action.get("restore_color") or "default").strip()
-        restore_payload["color"] = restore_color or "default"
 
         timer = threading.Timer(
-            restore_after_ms / 1000,
-            self._publish_dmx_restore,
-            args=(broker_host, broker_port, restore_payload),
+            delay_ms / 1000,
+            self._publish_dmx_request,
+            args=(payload,),
         )
         timer.daemon = True
         timer.start()
 
-    def _publish_dmx_restore(
-        self, broker_host: str, broker_port: int, payload: dict[str, Any]
-    ) -> None:
-        if self._publish_dmx_fade(broker_host, broker_port, payload):
+    def _publish_dmx_request(self, payload: dict[str, Any]) -> None:
+        if self._publish_dmx_fade(payload):
             target = payload.get("fixture_group_slug") or payload.get("fixture_slug") or "fixture"
-            self._record_action_event("dmx", "DMX restore", f"{target} {payload.get('state', 'on')}")
+            self._record_action_event("dmx", "DMX fade", f"{target} {payload.get('state', 'on')}")
         if self._on_action:
             self._on_action()
 
@@ -701,9 +681,7 @@ class LogicEngine:
         payload["color"] = color or "default"
         return payload
 
-    def _publish_dmx_fade(
-        self, broker_host: str, broker_port: int, payload: dict[str, Any]
-    ) -> bool:
+    def _publish_dmx_fade(self, payload: dict[str, Any]) -> bool:
         if mqtt_publish is None:
             self._record_action_event("dmx", "DMX failed", "Install paho-mqtt")
             return False
@@ -711,11 +689,11 @@ class LogicEngine:
             mqtt_publish.single(
                 DMX_FADE_TOPIC,
                 payload=json.dumps(payload, sort_keys=True),
-                hostname=broker_host,
-                port=broker_port,
+                hostname=DEFAULT_DMX_BROKER_HOST,
+                port=DEFAULT_DMX_BROKER_PORT,
             )
         except Exception as exc:
-            self._record_action_event("dmx", "DMX failed", f"{broker_host}: {exc}")
+            self._record_action_event("dmx", "DMX failed", f"{DEFAULT_DMX_BROKER_HOST}: {exc}")
             return False
         return True
 

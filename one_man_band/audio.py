@@ -190,6 +190,19 @@ class AudioManager:
             self._status.current_track = None
             return AudioStatus(**asdict(self._status))
 
+    def close(self) -> None:
+        with self._lock:
+            if self._status.initialized and pygame is not None:
+                pygame.mixer.music.stop()
+                if self._channel is not None:
+                    self._channel.stop()
+                    self._channel = None
+                pygame.mixer.quit()
+            self._status.initialized = False
+            self._status.playing = False
+            self._status.paused = False
+            self._status.current_track = None
+
     def pause(self) -> AudioStatus:
         with self._lock:
             if self._status.initialized and pygame is not None:

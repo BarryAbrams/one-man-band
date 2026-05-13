@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import os
+import threading
 
 from flask import Flask, jsonify, render_template, request, send_from_directory
 from flask_socketio import SocketIO, emit
@@ -21,6 +22,7 @@ logic_store = LogicStore(base_dir / "data" / "logic.sqlite3")
 logic_engine = LogicEngine(logic_store, controller, audio_manager, on_action=lambda: _broadcast_state())
 animation_store = AnimationStore(base_dir / "data" / "animations.sqlite3")
 _poller_started = False
+_shutdown_event = threading.Event()
 STATE_POLL_SECONDS = 0.1
 
 
@@ -179,9 +181,17 @@ def _broadcast_state() -> None:
 
 
 def _poll_state_forever() -> None:
-    while True:
+    while not _shutdown_event.is_set():
         socketio.sleep(STATE_POLL_SECONDS)
+        if _shutdown_event.is_set():
+            break
         socketio.emit("state:update", _combined_state(process_logic=True))
+
+
+def shutdown() -> None:
+    _shutdown_event.set()
+    audio_manager.close()
+    controller.close()
 
 
 def create_socketio(app: Flask) -> SocketIO:
