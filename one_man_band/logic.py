@@ -592,19 +592,21 @@ class LogicEngine:
             timer_name = self._end_timer(str(action.get("timer_name") or ""))
             self._record_action_event("timer", "Timer ended", timer_name)
         elif action_type == "solenoid_set":
-            self._controller.set_solenoid(
-                str(action.get("name") or ""), self._bool(action.get("enabled", True))
-            )
-            state = "HIGH" if self._bool(action.get("enabled", True)) else "LOW"
-            self._record_action_event("solenoid", "Solenoid", f"{action.get('name')} {state}")
+            delay_ms = max(0, int(action.get("delay_ms", 0) or 0))
+            if delay_ms <= 0:
+                self._run_solenoid_set(action, notify=False)
+            else:
+                timer = threading.Timer(delay_ms / 1000, self._run_solenoid_set, args=(action,))
+                timer.daemon = True
+                timer.start()
         elif action_type == "solenoid_pulse":
-            name = str(action.get("name") or "")
-            duration = max(0, int(action.get("duration_ms", 1000))) / 1000
-            self._controller.set_solenoid(name, True)
-            timer = threading.Timer(duration, self._finish_solenoid_pulse, args=(name,))
-            timer.daemon = True
-            timer.start()
-            self._record_action_event("solenoid", "Solenoid pulse", f"{name} {int(duration * 1000)} ms")
+            delay_ms = max(0, int(action.get("delay_ms", 0) or 0))
+            if delay_ms <= 0:
+                self._run_solenoid_pulse(action, notify=False)
+            else:
+                timer = threading.Timer(delay_ms / 1000, self._run_solenoid_pulse, args=(action,))
+                timer.daemon = True
+                timer.start()
         elif action_type == "servo_set":
             channel = int(action.get("channel", 0))
             if self._bool(action.get("enable", True)):
@@ -625,6 +627,26 @@ class LogicEngine:
     def _finish_solenoid_pulse(self, name: str) -> None:
         self._controller.set_solenoid(name, False)
         if self._on_action:
+            self._on_action()
+
+    def _run_solenoid_set(self, action: dict[str, Any], notify: bool = True) -> None:
+        self._controller.set_solenoid(
+            str(action.get("name") or ""), self._bool(action.get("enabled", True))
+        )
+        state = "HIGH" if self._bool(action.get("enabled", True)) else "LOW"
+        self._record_action_event("solenoid", "Solenoid", f"{action.get('name')} {state}")
+        if notify and self._on_action:
+            self._on_action()
+
+    def _run_solenoid_pulse(self, action: dict[str, Any], notify: bool = True) -> None:
+        name = str(action.get("name") or "")
+        duration = max(0, int(action.get("duration_ms", 1000))) / 1000
+        self._controller.set_solenoid(name, True)
+        timer = threading.Timer(duration, self._finish_solenoid_pulse, args=(name,))
+        timer.daemon = True
+        timer.start()
+        self._record_action_event("solenoid", "Solenoid pulse", f"{name} {int(duration * 1000)} ms")
+        if notify and self._on_action:
             self._on_action()
 
     def _run_pixels_animate(self, action: dict[str, Any], notify: bool = True) -> None:

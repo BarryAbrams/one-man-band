@@ -961,6 +961,10 @@
                             </select>
                           </label>
                         </template>
+                        <label class="field-label">
+                          Delay ms
+                          <input type="number" min="0" x-model.number="action.delay_ms">
+                        </label>
                       </div>
                     </template>
 
@@ -1249,6 +1253,10 @@
                             </select>
                           </label>
                         </template>
+                        <label class="field-label">
+                          Delay ms
+                          <input type="number" min="0" x-model.number="action.delay_ms">
+                        </label>
                       </div>
                     </template>
 
@@ -2280,10 +2288,10 @@
               return { type, timer_name: "Timer1" };
             }
             if (type === "solenoid_pulse") {
-              return { type, name: firstSolenoid, duration_ms: 1000 };
+              return { type, name: firstSolenoid, duration_ms: 1000, delay_ms: 0 };
             }
             if (type === "solenoid_set") {
-              return { type, name: firstSolenoid, enabled: true };
+              return { type, name: firstSolenoid, enabled: true, delay_ms: 0 };
             }
             if (type === "servo_set") {
               return { type, channel: firstServo, value: 127, enable: true };
@@ -2367,6 +2375,9 @@
             }
             if (normalized.type === "timer_set" || normalized.type === "timer_end") {
               normalized.timer_name = this.sanitizeTimerName(normalized.timer_name || "Timer1");
+            }
+            if (normalized.type === "solenoid_pulse" || normalized.type === "solenoid_set") {
+              normalized.delay_ms = Number(normalized.delay_ms || 0);
             }
             if (normalized.type === "pixels_animate") {
               const rails = Array.isArray(normalized.rails) ? normalized.rails : [];
@@ -2486,6 +2497,10 @@
               }
               if (payload.type === "solenoid_set") {
                 payload.enabled = this.logicBool(payload.enabled);
+                payload.delay_ms = Math.max(0, Number(payload.delay_ms) || 0);
+              }
+              if (payload.type === "solenoid_pulse") {
+                payload.delay_ms = Math.max(0, Number(payload.delay_ms) || 0);
               }
               if (payload.type === "servo_set") {
                 payload.enable = this.logicBool(payload.enable);
