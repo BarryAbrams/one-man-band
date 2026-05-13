@@ -2370,15 +2370,17 @@
             }
             if (normalized.type === "pixels_animate") {
               const rails = Array.isArray(normalized.rails) ? normalized.rails : [];
+              const startRgb = Array.isArray(action.start_rgb) ? action.start_rgb : [0, 0, 0];
+              const endRgb = Array.isArray(action.end_rgb) ? action.end_rgb : [0, 0, 255];
               normalized.all_rails = Boolean(normalized.all_rails || rails.length > 1);
               normalized.rail = normalized.rail || rails[0] || "1";
               normalized.rails = normalized.all_rails ? (this.meta.pixel_rails || ["1", "2", "3", "4"]) : [normalized.rail];
               normalized.animation_id = Number(normalized.animation_id || 0);
-              normalized.start_color = normalized.start_color || this.rgbToHex(normalized.start_rgb || [0, 0, 0]);
-              normalized.end_color = normalized.end_color || this.rgbToHex(normalized.end_rgb || [0, 0, 255]);
-              normalized.hue_variation = Number(normalized.hue_variation ?? normalized.end_rgb?.[0] ?? 32);
-              normalized.seed = Number(normalized.seed ?? normalized.end_rgb?.[1] ?? 17);
-              normalized.target_intensity = Number(normalized.target_intensity ?? normalized.end_rgb?.[2] ?? 255);
+              normalized.start_color = action.start_color || this.rgbToHex(startRgb);
+              normalized.end_color = action.end_color || this.rgbToHex(endRgb);
+              normalized.hue_variation = Number(action.hue_variation ?? endRgb[0] ?? 32);
+              normalized.seed = Number(action.seed ?? endRgb[1] ?? 17);
+              normalized.target_intensity = Number(action.target_intensity ?? endRgb[2] ?? 255);
               normalized.delay_ms = Number(normalized.delay_ms || 0);
             }
             if (normalized.type === "dmx_fade") {
