@@ -612,26 +612,37 @@ class LogicEngine:
             self._controller.set_servo_value(channel, int(action.get("value", 127)))
             self._record_action_event("servo", "Servo", f"{channel} -> {int(action.get('value', 127))}")
         elif action_type == "pixels_animate":
-            rails = action.get("rails") or []
-            rail_mask = 0
-            for rail in rails:
-                rail_mask |= 1 << (int(rail) - 1)
-            self._controller.animate_pixels(
-                rail_mask=rail_mask,
-                start=int(action.get("start", 0)),
-                count=int(action.get("count", 0)),
-                start_rgb=self._rgb(action.get("start_rgb"), [0, 0, 0]),
-                end_rgb=self._rgb(action.get("end_rgb"), [0, 0, 255]),
-                duration_ms=int(action.get("duration_ms", 1000)),
-                animation_id=int(action.get("animation_id", 0)),
-            )
-            self._record_action_event("pixels", "Neopixels", f"Rails {', '.join(str(rail) for rail in rails)}")
+            delay_ms = max(0, int(action.get("delay_ms", 0) or 0))
+            if delay_ms <= 0:
+                self._run_pixels_animate(action, notify=False)
+            else:
+                timer = threading.Timer(delay_ms / 1000, self._run_pixels_animate, args=(action,))
+                timer.daemon = True
+                timer.start()
         elif action_type == "dmx_fade":
             self._request_dmx_fade(action, rule_id, branch, index)
 
     def _finish_solenoid_pulse(self, name: str) -> None:
         self._controller.set_solenoid(name, False)
         if self._on_action:
+            self._on_action()
+
+    def _run_pixels_animate(self, action: dict[str, Any], notify: bool = True) -> None:
+        rails = action.get("rails") or []
+        rail_mask = 0
+        for rail in rails:
+            rail_mask |= 1 << (int(rail) - 1)
+        self._controller.animate_pixels(
+            rail_mask=rail_mask,
+            start=int(action.get("start", 0)),
+            count=int(action.get("count", 0)),
+            start_rgb=self._rgb(action.get("start_rgb"), [0, 0, 0]),
+            end_rgb=self._rgb(action.get("end_rgb"), [0, 0, 255]),
+            duration_ms=int(action.get("duration_ms", 1000)),
+            animation_id=int(action.get("animation_id", 0)),
+        )
+        self._record_action_event("pixels", "Neopixels", f"Rails {', '.join(str(rail) for rail in rails)}")
+        if notify and self._on_action:
             self._on_action()
 
     def _request_dmx_fade(
