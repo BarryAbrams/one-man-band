@@ -47,6 +47,9 @@ python app.py
 - Logic and state polling runs every 100 ms.
 - Logic timer causes listen for named countdown timers that are started by timer actions. Timer names use only letters and numbers.
 - NeoPixel commands target RP2040 pixel rails `PIX_1` through `PIX_4`, each currently treated as 100 pixels.
+- MQTT node control is enabled by default and connects to `192.168.0.153:1883`.
+  Override with `OMB_MQTT_ENABLED=0`, `OMB_MQTT_BROKER_HOST`, `OMB_MQTT_BROKER_PORT`, or `OMB_MQTT_HOSTNAME`.
+  The node subscribes to `parcadia/global/global_state`, `parcadia/<hostname>/global_state`, and `parcadia/global/whoisthere`, publishes status to `parcadia/to_gmmy/status`, and requests current state on `parcadia/to_gmmy/state_request`.
 - For a fully offline deployment, vendor Alpine locally instead of relying on an external CDN.
 
 ## RP2040 control protocol

@@ -1544,6 +1544,7 @@
           uploading: false,
           debugPageEvents: true,
           pageEventCounts: {},
+          pageEventSnapshots: {},
 
           init() {
             this.logPageEvent("alpine:init", { activeTab: this.activeTab });
@@ -1608,13 +1609,38 @@
             }
             const count = (this.pageEventCounts[source] || 0) + 1;
             this.pageEventCounts = { ...this.pageEventCounts, [source]: count };
-            console.log("[OMB page event]", {
+            const event = {
               source,
               count,
               at: new Date().toISOString(),
               summary: this.payloadSummary(payload),
               payload,
-            });
+            };
+            const snapshot = this.stablePageEventSnapshot(event);
+            if (this.pageEventSnapshots[source] === snapshot) {
+              return;
+            }
+            this.pageEventSnapshots = { ...this.pageEventSnapshots, [source]: snapshot };
+            console.log("[OMB page event]", event);
+          },
+
+          stablePageEventSnapshot(value) {
+            return JSON.stringify(this.stripPageEventNoise(value));
+          },
+
+          stripPageEventNoise(value) {
+            if (Array.isArray(value)) {
+              return value.map((item) => this.stripPageEventNoise(item));
+            }
+            if (value && typeof value === "object") {
+              return Object.fromEntries(
+                Object.entries(value)
+                  .filter(([key]) => key !== "count" && key !== "at")
+                  .sort(([left], [right]) => left.localeCompare(right))
+                  .map(([key, item]) => [key, this.stripPageEventNoise(item)])
+              );
+            }
+            return value;
           },
 
           payloadSummary(payload = {}) {

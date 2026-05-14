@@ -12,6 +12,7 @@ from .animations import AnimationStore
 from .audio import AudioManager
 from .device import DeviceController
 from .logic import LogicEngine, LogicStore
+from .node_control import NodeControlMqttClient
 
 
 socketio = SocketIO(async_mode="threading", cors_allowed_origins="*")
@@ -26,6 +27,12 @@ _shutdown_event = threading.Event()
 STATE_POLL_SECONDS = 0.1
 BOOT_ENABLED_RAILS = ["12V_B", "12V_C"]
 NODE_TITLE = os.environ.get("OMB_NODE_TITLE", "Overworld Bar")
+node_control = NodeControlMqttClient(
+    on_active=lambda: _activate_node(),
+    on_quiet=lambda: _quiet_node(),
+    on_cleanup=lambda: shutdown(),
+    on_state_changed=lambda: _broadcast_state(),
+)
 
 
 def _metadata() -> dict[str, object]:
@@ -46,6 +53,7 @@ def _combined_state(process_logic: bool = False) -> dict[str, object]:
         "audio_status": audio_manager.status().to_payload(),
         "logic_timers": logic_engine.timers_payload(),
         "logic_action_events": logic_engine.action_events_payload(),
+        "node_control": node_control.payload(),
     }
 
 
@@ -193,12 +201,24 @@ def _poll_state_forever() -> None:
 
 def shutdown() -> None:
     _shutdown_event.set()
+    node_control.stop()
     audio_manager.close()
     controller.close()
 
 
 def _initialize_boot_hardware() -> None:
     controller.set_rails_enabled(BOOT_ENABLED_RAILS, True)
+
+
+def _activate_node() -> None:
+    _initialize_boot_hardware()
+
+
+def _quiet_node() -> None:
+    audio_manager.stop()
+    controller.clear_solenoids()
+    controller.set_all_servos_enabled(False)
+    controller.set_all_rails(False)
 
 
 def create_socketio(app: Flask) -> SocketIO:
@@ -208,6 +228,7 @@ def create_socketio(app: Flask) -> SocketIO:
     if not _poller_started:
         _initialize_boot_hardware()
         logic_engine.run_boot_rules()
+        node_control.start()
         socketio.start_background_task(_poll_state_forever)
         _poller_started = True
 
