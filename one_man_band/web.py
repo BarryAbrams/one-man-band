@@ -30,6 +30,7 @@ NODE_TITLE = os.environ.get("OMB_NODE_TITLE", "Overworld Bar")
 node_control = NodeControlMqttClient(
     on_active=lambda: _activate_node(),
     on_quiet=lambda: _quiet_node(),
+    on_shutdown=lambda: _shutdown_node(),
     on_cleanup=lambda: shutdown(),
     on_state_changed=lambda: _broadcast_state(),
 )
@@ -219,6 +220,18 @@ def _quiet_node() -> None:
     controller.clear_solenoids()
     controller.set_all_servos_enabled(False)
     controller.set_all_rails(False)
+
+
+def _shutdown_node() -> None:
+    controller.animate_pixels(
+        rail_mask=0x0F,
+        start=0,
+        count=0,
+        start_rgb=(0, 0, 0),
+        end_rgb=(0, 0, 0),
+        duration_ms=0,
+        animation_id=0,
+    )
 
 
 def create_socketio(app: Flask) -> SocketIO:

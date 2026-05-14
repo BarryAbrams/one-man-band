@@ -50,6 +50,7 @@ python app.py
 - MQTT node control is enabled by default and connects to `192.168.0.153:1883`.
   Override with `OMB_MQTT_ENABLED=0`, `OMB_MQTT_BROKER_HOST`, `OMB_MQTT_BROKER_PORT`, or `OMB_MQTT_HOSTNAME`.
   The node subscribes to `parcadia/global/global_state`, `parcadia/<hostname>/global_state`, and `parcadia/global/whoisthere`, publishes status to `parcadia/to_gmmy/status`, and requests current state on `parcadia/to_gmmy/state_request`.
+  `shutdown` turns off NeoPixels only; `restart` and `reboot` require `OMB_MQTT_ALLOW_SYSTEM_COMMANDS=1`.
 - For a fully offline deployment, vendor Alpine locally instead of relying on an external CDN.
 
 ## RP2040 control protocol

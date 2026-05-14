@@ -42,6 +42,7 @@ class NodeControlMqttClient:
         *,
         on_active: Callable[[], None],
         on_quiet: Callable[[], None],
+        on_shutdown: Callable[[], None],
         on_cleanup: Callable[[], None],
         on_state_changed: Callable[[], None] | None = None,
     ) -> None:
@@ -49,8 +50,10 @@ class NodeControlMqttClient:
         self.broker_host = os.environ.get("OMB_MQTT_BROKER_HOST", DEFAULT_BROKER_HOST)
         self.broker_port = int(os.environ.get("OMB_MQTT_BROKER_PORT", str(DEFAULT_BROKER_PORT)))
         self.enabled = os.environ.get("OMB_MQTT_ENABLED", "1") == "1"
+        self.allow_system_commands = os.environ.get("OMB_MQTT_ALLOW_SYSTEM_COMMANDS", "0") == "1"
         self._on_active = on_active
         self._on_quiet = on_quiet
+        self._on_shutdown = on_shutdown
         self._on_cleanup = on_cleanup
         self._on_state_changed = on_state_changed
         self._lock = threading.RLock()
@@ -105,6 +108,7 @@ class NodeControlMqttClient:
                 "hostname": self.hostname,
                 "broker_host": self.broker_host,
                 "broker_port": self.broker_port,
+                "allow_system_commands": self.allow_system_commands,
                 "state": self._state,
                 "status": {
                     "code": 200 if self._connected else 503,
@@ -188,13 +192,20 @@ class NodeControlMqttClient:
             self.publish_status("OK")
             return
         if state == "restart":
+            if not self._system_commands_allowed(state):
+                return
             self._transition_and_run("restarting", "Restarting app", self._restart_command())
             return
         if state == "reboot":
+            if not self._system_commands_allowed(state):
+                return
             self._transition_and_run("rebooting", "Rebooting OS", self._reboot_command())
             return
         if state == "shutdown":
-            self._transition_and_run("shutting_down", "Shutting down OS", self._shutdown_command())
+            if not self._run_local_action(self._on_shutdown):
+                return
+            self._set_status("shutting_down", self._connected, "Shutdown command handled locally")
+            self.publish_status("Shutdown command handled locally")
 
     def _transition_and_run(self, state: str, message: str, command: list[str]) -> None:
         self._set_status(state, self._connected, message)
@@ -208,6 +219,14 @@ class NodeControlMqttClient:
             self._on_cleanup()
         finally:
             subprocess.Popen(command)
+
+    def _system_commands_allowed(self, state: str) -> bool:
+        if self.allow_system_commands:
+            return True
+        message = f"Ignored {state}: set OMB_MQTT_ALLOW_SYSTEM_COMMANDS=1 to allow system commands"
+        self._set_status(self._state, self._connected, message)
+        self.publish_status(message)
+        return False
 
     def _run_local_action(self, action: Callable[[], None]) -> bool:
         try:
@@ -226,9 +245,6 @@ class NodeControlMqttClient:
 
     def _reboot_command(self) -> list[str]:
         return os.environ.get("OMB_REBOOT_COMMAND", "sudo systemctl reboot").split()
-
-    def _shutdown_command(self) -> list[str]:
-        return os.environ.get("OMB_SHUTDOWN_COMMAND", "sudo systemctl poweroff").split()
 
     def _publish(self, topic: str, payload: dict[str, Any]) -> None:
         client = self._client
