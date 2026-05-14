@@ -24,6 +24,7 @@ def main() -> int:
             host=os.environ.get("OMB_HOST", "0.0.0.0"),
             port=int(os.environ.get("OMB_PORT", "5000")),
             debug=os.environ.get("OMB_DEBUG", "0") == "1",
+            allow_unsafe_werkzeug=True,
         )
     finally:
         shutdown()

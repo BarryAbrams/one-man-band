@@ -391,6 +391,17 @@ class DeviceController:
     def set_all_rails(self, enabled: bool) -> DeviceState:
         return self._update_register(REG_RAILS, 0x0F if enabled else 0x00)
 
+    def set_rails_enabled(self, names: list[str], enabled: bool) -> DeviceState:
+        unknown = [name for name in names if name not in RAILS]
+        if unknown:
+            raise ValueError(f"Unknown rail: {unknown[0]}")
+        state = self.read_state()
+        mask = 0
+        for name in names:
+            mask |= RAILS[name]
+        value = (state.rails | mask) if enabled else (state.rails & ~mask)
+        return self._update_register(REG_RAILS, value)
+
     def toggle_solenoid(self, name: str) -> DeviceState:
         if name not in SOLENOIDS:
             raise ValueError(f"Unknown solenoid: {name}")

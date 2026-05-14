@@ -24,12 +24,15 @@ animation_store = AnimationStore(base_dir / "data" / "animations.sqlite3")
 _poller_started = False
 _shutdown_event = threading.Event()
 STATE_POLL_SECONDS = 0.1
+BOOT_ENABLED_RAILS = ["12V_B", "12V_C"]
+NODE_TITLE = os.environ.get("OMB_NODE_TITLE", "Overworld Bar")
 
 
 def _metadata() -> dict[str, object]:
     return {
         **controller.metadata(),
         **logic_engine.metadata(),
+        "node_title": NODE_TITLE,
         "audio_extensions": [".wav", ".mp3", ".ogg"],
     }
 
@@ -194,11 +197,16 @@ def shutdown() -> None:
     controller.close()
 
 
+def _initialize_boot_hardware() -> None:
+    controller.set_rails_enabled(BOOT_ENABLED_RAILS, True)
+
+
 def create_socketio(app: Flask) -> SocketIO:
     global _poller_started
     socketio.init_app(app)
 
     if not _poller_started:
+        _initialize_boot_hardware()
         logic_engine.run_boot_rules()
         socketio.start_background_task(_poll_state_forever)
         _poller_started = True

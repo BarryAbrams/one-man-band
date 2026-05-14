@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>One Man Band Control</title>
+    <title>{{ metadata.node_title }} Control</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js"></script>
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" crossorigin="anonymous"></script>
@@ -13,7 +13,7 @@
       <section class="hero">
         <div>
           <p class="eyebrow">Closed-System Controller</p>
-          <h1>One Man Band</h1>
+          <h1 x-text="meta.node_title || 'Overworld Bar'">{{ metadata.node_title }}</h1>
           <p class="lede">
             Authoring and monitoring surface for the OMB, where inputs, outputs, motion, media, and future logic work together.
           </p>
@@ -1542,8 +1542,11 @@
           seenActionEventIds: [],
           uploadFile: null,
           uploading: false,
+          debugPageEvents: true,
+          pageEventCounts: {},
 
           init() {
+            this.logPageEvent("alpine:init", { activeTab: this.activeTab });
             this.newLogicRule();
             this.loadState();
             this.loadAudioLibrary();
@@ -1560,18 +1563,23 @@
 
             this.socket.on("connect", () => {
               this.socketConnected = true;
+              this.logPageEvent("socket:connect", { id: this.socket.id });
               this.loadState();
             });
             this.socket.on("disconnect", () => {
               this.socketConnected = false;
+              this.logPageEvent("socket:disconnect", {});
             });
             this.socket.on("connect_error", () => {
               this.socketConnected = false;
+              this.logPageEvent("socket:connect_error", {});
             });
             this.socket.on("meta:init", (payload) => {
+              this.logPageEvent("socket:meta:init", payload);
               this.meta = payload;
             });
             this.socket.on("state:update", (payload) => {
+              this.logPageEvent("socket:state:update", payload);
               this.state = payload;
               this.syncActionToasts(payload.logic_action_events || []);
               this.syncServoDrafts(payload);
@@ -1580,16 +1588,51 @@
               }
             });
             this.socket.on("audio:update", (payload) => {
+              this.logPageEvent("socket:audio:update", payload);
               this.audio.status = payload.status || this.audio.status;
               this.audio.tracks = payload.tracks || this.audio.tracks;
             });
             this.socket.on("server:error", (payload) => {
+              this.logPageEvent("socket:server:error", payload);
               this.state = { ...this.state, error: payload.message || "Unknown server error" };
               this.audio.status = {
                 ...this.audio.status,
                 error: payload.message || "Unknown server error",
               };
             });
+          },
+
+          logPageEvent(source, payload = {}) {
+            if (!this.debugPageEvents || typeof console === "undefined") {
+              return;
+            }
+            const count = (this.pageEventCounts[source] || 0) + 1;
+            this.pageEventCounts = { ...this.pageEventCounts, [source]: count };
+            console.log("[OMB page event]", {
+              source,
+              count,
+              at: new Date().toISOString(),
+              summary: this.payloadSummary(payload),
+              payload,
+            });
+          },
+
+          payloadSummary(payload = {}) {
+            return {
+              connected: payload.connected,
+              backend: payload.backend,
+              version: payload.version,
+              rails: payload.rails_map,
+              solenoids: payload.solenoids_map,
+              servos: payload.servo_enabled_map,
+              servo_values: payload.servo_values_map,
+              timers: Array.isArray(payload.logic_timers) ? payload.logic_timers.length : undefined,
+              action_events: Array.isArray(payload.logic_action_events) ? payload.logic_action_events.length : undefined,
+              tracks: Array.isArray(payload.tracks) ? payload.tracks.length : undefined,
+              rules: Array.isArray(payload.rules) ? payload.rules.length : undefined,
+              animations: Array.isArray(payload.animations) ? payload.animations.length : undefined,
+              error: payload.error || payload.message,
+            };
           },
 
           defaultAnimation() {
@@ -1669,6 +1712,7 @@
                 throw new Error(`HTTP ${response.status}`);
               }
               const payload = await response.json();
+              this.logPageEvent("fetch:/api/animations", payload);
               this.animations.items = payload.animations || [];
             } catch (error) {
               this.animations.message = `Unable to load animations: ${error.message}`;
@@ -1713,6 +1757,7 @@
                 body: JSON.stringify(payload),
               });
               const result = await response.json();
+              this.logPageEvent(`fetch:${url}`, result);
               if (!response.ok) {
                 throw new Error(result.error || `HTTP ${response.status}`);
               }
@@ -1753,6 +1798,7 @@
             try {
               const response = await fetch(`/api/animations/${this.animations.form.id}`, { method: "DELETE" });
               const result = await response.json();
+              this.logPageEvent("fetch:/api/animations/delete", result);
               if (!response.ok) {
                 throw new Error(result.error || `HTTP ${response.status}`);
               }
@@ -2347,6 +2393,7 @@
                 throw new Error(`HTTP ${response.status}`);
               }
               const payload = await response.json();
+              this.logPageEvent("fetch:/api/logic", payload);
               this.logic.rules = payload.rules || [];
             } catch (error) {
               this.logic.message = `Unable to load rules: ${error.message}`;
@@ -2592,6 +2639,7 @@
                 body: JSON.stringify(payload),
               });
               const result = await response.json();
+              this.logPageEvent(`fetch:${url}`, result);
               if (!response.ok) {
                 throw new Error(result.error || `HTTP ${response.status}`);
               }
@@ -2610,6 +2658,7 @@
             try {
               const response = await fetch(`/api/logic/${this.logic.form.id}`, { method: "DELETE" });
               const result = await response.json();
+              this.logPageEvent("fetch:/api/logic/delete", result);
               if (!response.ok) {
                 throw new Error(result.error || `HTTP ${response.status}`);
               }
@@ -2802,6 +2851,7 @@
                 throw new Error(`HTTP ${response.status}`);
               }
               this.state = await response.json();
+              this.logPageEvent("fetch:/api/state", this.state);
               this.syncServoDrafts(this.state);
               if (this.state.audio_status) {
                 this.audio.status = this.state.audio_status;
@@ -2905,6 +2955,7 @@
                 throw new Error(`HTTP ${response.status}`);
               }
               const payload = await response.json();
+              this.logPageEvent("fetch:/api/audio", payload);
               this.audio.tracks = payload.tracks || [];
               this.audio.status = payload.status || this.audio.status;
             } catch (error) {
@@ -2932,6 +2983,7 @@
                 body: formData,
               });
               const payload = await response.json();
+              this.logPageEvent("fetch:/api/audio/upload", payload);
               if (!response.ok) {
                 throw new Error(payload.error || `HTTP ${response.status}`);
               }
@@ -2961,6 +3013,7 @@
                 method: "DELETE",
               });
               const payload = await response.json();
+              this.logPageEvent("fetch:/api/audio/delete", payload);
               if (!response.ok) {
                 throw new Error(payload.error || `HTTP ${response.status}`);
               }
