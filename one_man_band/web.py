@@ -4,6 +4,8 @@ from pathlib import Path
 
 import os
 import threading
+import time
+from typing import Any
 
 from flask import Flask, jsonify, render_template, request, send_from_directory
 from flask_socketio import SocketIO, emit
@@ -20,13 +22,249 @@ controller = DeviceController()
 base_dir = Path(__file__).resolve().parent.parent
 audio_manager = AudioManager(base_dir)
 logic_store = LogicStore(base_dir / "data" / "logic.sqlite3")
-logic_engine = LogicEngine(logic_store, controller, audio_manager, on_action=lambda: _broadcast_state())
 animation_store = AnimationStore(base_dir / "data" / "animations.sqlite3")
 _poller_started = False
 _shutdown_event = threading.Event()
 STATE_POLL_SECONDS = 0.1
 BOOT_ENABLED_RAILS = ["12V_B", "12V_C"]
 NODE_TITLE = os.environ.get("OMB_NODE_TITLE", "Overworld Bar")
+
+
+class AnimationRunner:
+    def __init__(
+        self,
+        store: AnimationStore,
+        controller: DeviceController,
+        audio_manager: AudioManager,
+        on_update,
+    ) -> None:
+        self._store = store
+        self._controller = controller
+        self._audio_manager = audio_manager
+        self._on_update = on_update
+        self._lock = threading.RLock()
+        self._active: dict[str, dict[str, Any]] = {}
+
+    def play(self, name: str, interrupt: bool = False) -> None:
+        animation = self._animation_by_name(name)
+        if animation is None:
+            return
+        if interrupt:
+            self.stop("")
+        self.stop(animation.name)
+
+        stop_event = threading.Event()
+        active = {"animation": animation, "timers": [], "stop_event": stop_event}
+        with self._lock:
+            self._active[animation.name] = active
+
+        start = time.monotonic()
+        timeline = animation.timeline or {}
+        tracks = [track for track in timeline.get("tracks", []) if isinstance(track, dict)]
+        duration_seconds = max(0, animation.duration_ms) / 1000
+
+        for track in tracks:
+            if track.get("type") == "servo":
+                continue
+            for keyframe in self._sorted_keyframes(track):
+                delay = max(0, (int(keyframe.get("time_ms") or 0) / 1000))
+                timer = threading.Timer(delay, self._apply_keyframe, args=(track, keyframe, stop_event))
+                timer.daemon = True
+                timer.start()
+                active["timers"].append(timer)
+
+        if any(track.get("type") == "servo" for track in tracks):
+            servo_thread = threading.Thread(
+                target=self._run_servo_tracks,
+                args=(tracks, animation.duration_ms, start, stop_event),
+                daemon=True,
+            )
+            servo_thread.start()
+            active["timers"].append(servo_thread)
+
+        finish_timer = threading.Timer(duration_seconds, self._finish, args=(animation.name,))
+        finish_timer.daemon = True
+        finish_timer.start()
+        active["timers"].append(finish_timer)
+        self._on_update()
+
+    def stop(self, name: str) -> None:
+        with self._lock:
+            if name:
+                items = [(name, self._active.pop(name, None))]
+            else:
+                items = list(self._active.items())
+                self._active.clear()
+
+        for _animation_name, active in items:
+            if not active:
+                continue
+            stop_event = active["stop_event"]
+            stop_event.set()
+            for timer in active["timers"]:
+                if isinstance(timer, threading.Timer):
+                    timer.cancel()
+            animation = active["animation"]
+            self._set_animation_relays_low(animation)
+            self._stop_animation_audio(animation)
+        self._on_update()
+
+    def _finish(self, name: str) -> None:
+        with self._lock:
+            active = self._active.pop(name, None)
+        if not active:
+            return
+        active["stop_event"].set()
+        animation = active["animation"]
+        self._set_animation_relays_low(animation)
+        self._stop_animation_audio(animation)
+        self._on_update()
+
+    def _animation_by_name(self, name: str):
+        for animation in self._store.list_animations():
+            if animation.published and animation.name == name:
+                return animation
+        return None
+
+    def _apply_keyframe(
+        self, track: dict[str, Any], keyframe: dict[str, Any], stop_event: threading.Event
+    ) -> None:
+        if stop_event.is_set():
+            return
+        track_type = track.get("type")
+        target = track.get("target") or {}
+        if track_type == "solenoid" and target.get("name"):
+            self._controller.set_solenoid(str(target["name"]), self._bool(keyframe.get("value")))
+        elif track_type == "pixels":
+            payload = self._pixel_animation_payload(track, keyframe)
+            self._controller.animate_pixels(**payload)
+        elif track_type == "audio" and target.get("filename"):
+            self._audio_manager.play(str(target["filename"]), str(target.get("speaker") or "both"))
+        self._on_update()
+
+    def _run_servo_tracks(
+        self,
+        tracks: list[dict[str, Any]],
+        duration_ms: int,
+        started_at: float,
+        stop_event: threading.Event,
+    ) -> None:
+        while not stop_event.is_set():
+            elapsed_ms = int((time.monotonic() - started_at) * 1000)
+            if elapsed_ms > duration_ms:
+                break
+            for track in tracks:
+                if track.get("type") != "servo":
+                    continue
+                value = self._servo_value_at_time(track, elapsed_ms)
+                target = track.get("target") or {}
+                if value is not None and "channel" in target:
+                    self._controller.set_servo_value(int(target["channel"]), int(round(value)))
+            time.sleep(0.05)
+
+    def _pixel_animation_payload(self, track: dict[str, Any], keyframe: dict[str, Any]) -> dict[str, Any]:
+        target = track.get("target") or {}
+        rails = self._pixel_rails(target)
+        keyframes = self._sorted_keyframes(track)
+        index = keyframes.index(keyframe) if keyframe in keyframes else -1
+        next_keyframe = keyframes[index + 1] if index >= 0 and index + 1 < len(keyframes) else None
+        duration_ms = (
+            max(0, int(next_keyframe.get("time_ms") or 0) - int(keyframe.get("time_ms") or 0))
+            if next_keyframe
+            else 100
+        )
+        return {
+            "rail_mask": self._rail_mask(rails),
+            "start": self._pixel_start(target),
+            "count": self._pixel_count(target),
+            "start_rgb": self._hex_to_rgb(keyframe.get("color") or "#000000"),
+            "end_rgb": self._hex_to_rgb((next_keyframe or keyframe).get("color") or "#000000"),
+            "duration_ms": duration_ms,
+            "animation_id": 0,
+        }
+
+    def _set_animation_relays_low(self, animation) -> None:
+        for track in (animation.timeline or {}).get("tracks", []):
+            target = track.get("target") or {}
+            if track.get("type") == "solenoid" and target.get("name"):
+                self._controller.set_solenoid(str(target["name"]), False)
+
+    def _stop_animation_audio(self, animation) -> None:
+        if any(track.get("type") == "audio" for track in (animation.timeline or {}).get("tracks", [])):
+            self._audio_manager.stop()
+
+    def _servo_value_at_time(self, track: dict[str, Any], time_ms: int) -> float | None:
+        keyframes = self._sorted_keyframes(track)
+        if not keyframes:
+            return None
+        next_index = next(
+            (index for index, keyframe in enumerate(keyframes) if int(keyframe.get("time_ms") or 0) >= time_ms),
+            -1,
+        )
+        current = keyframes[0] if next_index <= 0 else keyframes[next_index - 1]
+        next_keyframe = keyframes[0] if next_index <= 0 else keyframes[next_index] if next_index < len(keyframes) else current
+        span = max(1, int(next_keyframe.get("time_ms") or 0) - int(current.get("time_ms") or 0))
+        raw_t = 1 if current is next_keyframe else (time_ms - int(current.get("time_ms") or 0)) / span
+        t = self._ease(max(0, min(1, raw_t)), str(current.get("easing") or "linear"))
+        return float(current.get("value") or 0) + (float(next_keyframe.get("value") or 0) - float(current.get("value") or 0)) * t
+
+    def _sorted_keyframes(self, track: dict[str, Any]) -> list[dict[str, Any]]:
+        return sorted(
+            [keyframe for keyframe in track.get("keyframes", []) if isinstance(keyframe, dict)],
+            key=lambda keyframe: int(keyframe.get("time_ms") or 0),
+        )
+
+    def _pixel_rails(self, target: dict[str, Any]) -> list[str]:
+        if target.get("scope") == "all":
+            return list((self._controller.metadata().get("pixel_rails") or []))
+        return [str(target.get("line") or "1")]
+
+    def _pixel_start(self, target: dict[str, Any]) -> int:
+        return 0 if target.get("scope") in {"line", "all"} else int(target.get("start") or 0)
+
+    def _pixel_count(self, target: dict[str, Any]) -> int:
+        if target.get("scope") == "pixel":
+            return 1
+        if target.get("scope") == "range":
+            return int(target.get("count") or 1)
+        return 0
+
+    def _rail_mask(self, rails: list[str]) -> int:
+        mask = 0
+        for rail in rails:
+            mask |= 1 << (int(rail) - 1)
+        return mask
+
+    def _hex_to_rgb(self, value: Any) -> tuple[int, int, int]:
+        color = str(value or "#000000").lstrip("#")
+        if len(color) != 6:
+            color = "000000"
+        return tuple(int(color[index : index + 2], 16) for index in (0, 2, 4))
+
+    def _ease(self, t: float, easing: str) -> float:
+        if easing == "ease-in":
+            return t * t
+        if easing == "ease-out":
+            return 1 - ((1 - t) ** 2)
+        if easing == "ease":
+            return t * t * (3 - 2 * t)
+        return t
+
+    def _bool(self, value: Any) -> bool:
+        if isinstance(value, str):
+            return value.strip().lower() not in {"0", "false", "low", "off", "no"}
+        return bool(value)
+
+
+animation_runner = AnimationRunner(animation_store, controller, audio_manager, on_update=lambda: _broadcast_state())
+logic_engine = LogicEngine(
+    logic_store,
+    controller,
+    audio_manager,
+    on_action=lambda: _broadcast_state(),
+    on_animation_start=animation_runner.play,
+    on_animation_stop=animation_runner.stop,
+)
 node_control = NodeControlMqttClient(
     on_active=lambda: _activate_node(),
     on_quiet=lambda: _quiet_node(),
@@ -153,6 +391,14 @@ def create_app() -> Flask:
         logic_engine.delete_rule(rule_id)
         return jsonify({"ok": True})
 
+    @app.post("/api/logic/<int:rule_id>/run")
+    def logic_run_rule(rule_id: int):
+        try:
+            rule = logic_engine.run_rule_now(rule_id)
+        except (TypeError, ValueError) as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        return jsonify({"ok": True, "rule": rule.to_payload()})
+
     @app.post("/api/audio/upload")
     def audio_upload():
         file = request.files.get("file")
@@ -202,6 +448,7 @@ def _poll_state_forever() -> None:
 
 def shutdown() -> None:
     _shutdown_event.set()
+    animation_runner.stop("")
     node_control.stop()
     audio_manager.close()
     controller.close()
@@ -216,6 +463,7 @@ def _activate_node() -> None:
 
 
 def _quiet_node() -> None:
+    animation_runner.stop("")
     audio_manager.stop()
     controller.clear_solenoids()
     controller.set_all_servos_enabled(False)

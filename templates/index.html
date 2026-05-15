@@ -1390,6 +1390,7 @@
 
               <div class="actions logic-actions">
                 <button class="secondary" @click="saveLogicRule()">Save Rule</button>
+                <button class="secondary" @click="runLogicRuleNow()" :disabled="!logic.form.id">Run Now</button>
                 <button class="secondary" @click="newLogicRule()">Clear Form</button>
                 <button class="secondary danger" @click="deleteLogicRule()" :disabled="!logic.form.id">Delete</button>
               </div>
@@ -2693,6 +2694,25 @@
               this.newLogicRule();
             } catch (error) {
               this.logic.message = `Delete failed: ${error.message}`;
+            }
+          },
+
+          async runLogicRuleNow() {
+            if (!this.logic.form.id) {
+              this.logic.message = "Save the rule before running it";
+              return;
+            }
+            try {
+              const response = await fetch(`/api/logic/${this.logic.form.id}/run`, { method: "POST" });
+              const result = await response.json();
+              this.logPageEvent("fetch:/api/logic/run", result);
+              if (!response.ok) {
+                throw new Error(result.error || `HTTP ${response.status}`);
+              }
+              this.logic.message = `Ran ${result.rule?.name || "rule"}`;
+              await this.loadState();
+            } catch (error) {
+              this.logic.message = `Run failed: ${error.message}`;
             }
           },
 

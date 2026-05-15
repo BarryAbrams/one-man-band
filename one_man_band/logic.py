@@ -22,6 +22,8 @@ if TYPE_CHECKING:
 
 
 ActionCallback = Callable[[], None]
+AnimationStartCallback = Callable[[str, bool], None]
+AnimationStopCallback = Callable[[str], None]
 TIMER_NAME_RE = re.compile(r"^[A-Za-z0-9]+$")
 DMX_FADE_TOPIC = "parcadia/to_gmmy/dmx_fade"
 DEFAULT_DMX_BROKER_HOST = "192.168.0.153"
@@ -107,6 +109,15 @@ class LogicStore:
                 "SELECT * FROM logic_rules ORDER BY id ASC"
             ).fetchall()
         return [self._row_to_rule(row) for row in rows]
+
+    def get_rule(self, rule_id: int) -> LogicRule:
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM logic_rules WHERE id = ?", (rule_id,)
+            ).fetchone()
+        if row is None:
+            raise ValueError(f"Logic rule not found: {rule_id}")
+        return self._row_to_rule(row)
 
     def upsert_rule(self, payload: dict[str, Any]) -> LogicRule:
         now = time.time()
@@ -224,11 +235,15 @@ class LogicEngine:
         controller: DeviceController,
         audio_manager: "AudioManager",
         on_action: ActionCallback | None = None,
+        on_animation_start: AnimationStartCallback | None = None,
+        on_animation_stop: AnimationStopCallback | None = None,
     ) -> None:
         self._store = store
         self._controller = controller
         self._audio_manager = audio_manager
         self._on_action = on_action
+        self._on_animation_start = on_animation_start
+        self._on_animation_stop = on_animation_stop
         self._lock = threading.RLock()
         self._previous_gpio: dict[str, bool] = {}
         self._stable_since: dict[int, float] = {}
@@ -324,6 +339,13 @@ class LogicEngine:
             self._timer_position_seen = {
                 item for item in self._timer_position_seen if item[0] != rule_id
             }
+
+    def run_rule_now(self, rule_id: int, branch: str = "then") -> LogicRule:
+        if branch not in {"then", "else"}:
+            raise ValueError("Branch must be then or else")
+        rule = self._store.get_rule(rule_id)
+        self._fire(rule, branch)
+        return rule
 
     def run_boot_rules(self) -> list[str]:
         with self._lock:
@@ -570,6 +592,8 @@ class LogicEngine:
                     if interrupt:
                         self._running_animations.clear()
                     self._running_animations.add(name)
+                if self._on_animation_start:
+                    self._on_animation_start(name, interrupt)
                 detail = f"{name} (interrupting)" if interrupt else name
                 self._record_action_event("animation", "Animation started", detail)
         elif action_type == "animation_stop":
@@ -581,6 +605,8 @@ class LogicEngine:
                 else:
                     self._running_animations.clear()
                     detail = "All animations"
+            if self._on_animation_stop:
+                self._on_animation_stop(name)
             self._record_action_event("animation", "Animation stopped", detail)
         elif action_type == "timer_set":
             self._set_timer(
