@@ -443,7 +443,6 @@
 
               <div class="animation-toolbar">
                 <div class="actions">
-                  <button class="secondary" @click="addAnimationTrack('rail')">Add Power Rail</button>
                   <button class="secondary" @click="addAnimationTrack('solenoid')">Add Relay</button>
                   <button class="secondary" @click="addAnimationTrack('servo')">Add Servo</button>
                   <button class="secondary" @click="addAnimationTrack('pixels')">Add Neopixels</button>
@@ -490,19 +489,6 @@
                       <label class="check-label">
                         <input type="checkbox" x-model="selectedAnimationTrack().persist" @change="scheduleAnimationSave()">
                         Persist after end
-                      </label>
-                    </div>
-                  </template>
-
-                  <template x-if="selectedAnimationTrack().type === 'rail'">
-                    <div class="logic-row">
-                      <label class="field-label">
-                        Power Rail
-                        <select x-model="selectedAnimationTrack().target.name" @change="scheduleAnimationSave()">
-                          <template x-for="name in meta.rails || []" :key="name">
-                            <option :value="name" x-text="railLabels[name]?.title || name"></option>
-                          </template>
-                        </select>
                       </label>
                     </div>
                   </template>
@@ -607,15 +593,6 @@
                             <select x-model="keyframe.value" @change="keyframe.value = logicBool(keyframe.value); scheduleAnimationSave()">
                               <option value="true">HIGH</option>
                               <option value="false">LOW</option>
-                            </select>
-                          </label>
-                        </template>
-                        <template x-if="selectedAnimationTrack().type === 'rail'">
-                          <label class="field-label">
-                            State
-                            <select x-model="keyframe.value" @change="keyframe.value = logicBool(keyframe.value); scheduleAnimationSave()">
-                              <option value="true">ON</option>
-                              <option value="false">OFF</option>
                             </select>
                           </label>
                         </template>
@@ -934,6 +911,9 @@
                               <option value="solenoid_set">Set Relay</option>
                               <option value="solenoid_pulse">Pulse Relay</option>
                             </optgroup>
+                            <optgroup label="Power Rails">
+                              <option value="rail_set">Set Power Rail</option>
+                            </optgroup>
                             <optgroup label="Servos">
                               <option value="servo_set">Set Servo Position</option>
                             </optgroup>
@@ -1060,6 +1040,30 @@
                             </select>
                           </label>
                         </template>
+                        <label class="field-label">
+                          Delay ms
+                          <input type="number" min="0" x-model.number="action.delay_ms">
+                        </label>
+                      </div>
+                    </template>
+
+                    <template x-if="action.type === 'rail_set'">
+                      <div class="logic-row">
+                        <label class="field-label">
+                          Power Rail
+                          <select x-model="action.name">
+                            <template x-for="name in meta.rails || []" :key="name">
+                              <option :value="name" x-text="railLabels[name]?.title || name"></option>
+                            </template>
+                          </select>
+                        </label>
+                        <label class="field-label">
+                          State
+                          <select x-model="action.enabled">
+                            <option :value="true">ON</option>
+                            <option :value="false">OFF</option>
+                          </select>
+                        </label>
                         <label class="field-label">
                           Delay ms
                           <input type="number" min="0" x-model.number="action.delay_ms">
@@ -1226,6 +1230,9 @@
                               <option value="solenoid_set">Set Relay</option>
                               <option value="solenoid_pulse">Pulse Relay</option>
                             </optgroup>
+                            <optgroup label="Power Rails">
+                              <option value="rail_set">Set Power Rail</option>
+                            </optgroup>
                             <optgroup label="Servos">
                               <option value="servo_set">Set Servo Position</option>
                             </optgroup>
@@ -1352,6 +1359,30 @@
                             </select>
                           </label>
                         </template>
+                        <label class="field-label">
+                          Delay ms
+                          <input type="number" min="0" x-model.number="action.delay_ms">
+                        </label>
+                      </div>
+                    </template>
+
+                    <template x-if="action.type === 'rail_set'">
+                      <div class="logic-row">
+                        <label class="field-label">
+                          Power Rail
+                          <select x-model="action.name">
+                            <template x-for="name in meta.rails || []" :key="name">
+                              <option :value="name" x-text="railLabels[name]?.title || name"></option>
+                            </template>
+                          </select>
+                        </label>
+                        <label class="field-label">
+                          State
+                          <select x-model="action.enabled">
+                            <option :value="true">ON</option>
+                            <option :value="false">OFF</option>
+                          </select>
+                        </label>
                         <label class="field-label">
                           Delay ms
                           <input type="number" min="0" x-model.number="action.delay_ms">
@@ -1776,19 +1807,7 @@
             const firstSolenoid = (this.meta.solenoids || ["P0"])[0];
             const firstServo = (this.meta.servos || [0])[0];
             const firstRail = (this.meta.pixel_rails || ["1"])[0];
-            const firstPowerRail = (this.meta.rails || ["12V_B"])[0];
             const base = { id, type, label: "", target: {}, keyframes: [] };
-            if (type === "rail") {
-              return {
-                ...base,
-                label: this.railLabels[firstPowerRail]?.title || firstPowerRail,
-                target: { name: firstPowerRail },
-                keyframes: [
-                  { time_ms: 0, value: true },
-                  { time_ms: 250, value: false },
-                ],
-              };
-            }
             if (type === "servo") {
               return {
                 ...base,
@@ -1835,9 +1854,6 @@
           },
 
           defaultAnimationKeyframe(type, timeMs = 0) {
-            if (type === "rail") {
-              return { time_ms: timeMs, value: true };
-            }
             if (type === "servo") {
               return { time_ms: timeMs, value: 127, easing: "ease" };
             }
@@ -1985,7 +2001,6 @@
                   ...track,
                   keyframes: [...(track.keyframes || [])]
                     .map((keyframe) => track.type === "solenoid" ? { ...keyframe, value: this.logicBool(keyframe.value) } : keyframe)
-                    .map((keyframe) => track.type === "rail" ? { ...keyframe, value: this.logicBool(keyframe.value) } : keyframe)
                     .map((keyframe) => track.type === "pixels" ? {
                       ...keyframe,
                       animation_id: Number(keyframe.animation_id || 0),
@@ -2065,8 +2080,8 @@
               keyframe = this.defaultAnimationKeyframe("pixels", time);
             } else if (track.type === "dmx") {
               keyframe = this.defaultAnimationKeyframe("dmx", time);
-            } else if (track.type === "solenoid" || track.type === "rail") {
-              keyframe = this.defaultAnimationKeyframe(track.type, time);
+            } else if (track.type === "solenoid") {
+              keyframe = this.defaultAnimationKeyframe("solenoid", time);
             }
             track.keyframes = [...(track.keyframes || []), keyframe];
             this.sortAnimationKeyframes(track);
@@ -2108,9 +2123,6 @@
             if (track.type === "servo") {
               return `Servo ${track.target.channel}`;
             }
-            if (track.type === "rail") {
-              return this.railLabels[track.target.name]?.title || track.target.name || "Power rail";
-            }
             if (track.type === "pixels") {
               return this.pixelTargetLabel(track.target);
             }
@@ -2146,9 +2158,6 @@
 
           timelineVisual(track) {
             if (track.type === "solenoid") {
-              return this.solenoidTimelineVisual(track);
-            }
-            if (track.type === "rail") {
               return this.solenoidTimelineVisual(track);
             }
             if (track.type === "servo") {
@@ -2402,10 +2411,6 @@
               if (track.type === "dmx") {
                 return;
               }
-              if (track.type === "rail" && track.target?.name) {
-                const keyframe = this.keyframeAtTime(track, timeMs);
-                this.socket.emit("rail:set", { name: track.target.name, enabled: keyframe ? this.logicBool(keyframe.value) : false });
-              }
               if (track.type === "solenoid" && track.target?.name) {
                 const keyframe = this.keyframeAtTime(track, timeMs);
                 this.socket.emit("solenoid:set", { name: track.target.name, enabled: keyframe ? this.logicBool(keyframe.value) : false });
@@ -2482,9 +2487,6 @@
             }
             if (track.type === "solenoid") {
               this.socket.emit("solenoid:set", { name: track.target.name, enabled: this.logicBool(keyframe.value) });
-            }
-            if (track.type === "rail") {
-              this.socket.emit("rail:set", { name: track.target.name, enabled: this.logicBool(keyframe.value) });
             }
             if (track.type === "pixels") {
               this.socket.emit("pixels:animate", this.pixelAnimationPayload(track, keyframe));
@@ -2617,6 +2619,7 @@
           defaultAction(type = "") {
             const firstSolenoid = (this.meta.solenoids || ["P0"])[0];
             const firstServo = (this.meta.servos || [0])[0];
+            const firstPowerRail = (this.meta.rails || ["12V_B"])[0];
             if (!type) {
               return { type: "" };
             }
@@ -2643,6 +2646,9 @@
             }
             if (type === "solenoid_set") {
               return { type, name: firstSolenoid, enabled: true, delay_ms: 0 };
+            }
+            if (type === "rail_set") {
+              return { type, name: firstPowerRail, enabled: true, delay_ms: 0 };
             }
             if (type === "servo_set") {
               return { type, channel: firstServo, value: 127, enable: true };
@@ -2729,6 +2735,11 @@
               normalized.timer_name = this.sanitizeTimerName(normalized.timer_name || "Timer1");
             }
             if (normalized.type === "solenoid_pulse" || normalized.type === "solenoid_set") {
+              normalized.delay_ms = Number(normalized.delay_ms || 0);
+            }
+            if (normalized.type === "rail_set") {
+              normalized.name = normalized.name || (this.meta.rails || ["12V_B"])[0];
+              normalized.enabled = this.logicBool(normalized.enabled);
               normalized.delay_ms = Number(normalized.delay_ms || 0);
             }
             if (normalized.type === "pixels_animate") {
@@ -2858,6 +2869,11 @@
                 payload.delay_ms = Math.max(0, Number(payload.delay_ms) || 0);
               }
               if (payload.type === "solenoid_pulse") {
+                payload.delay_ms = Math.max(0, Number(payload.delay_ms) || 0);
+              }
+              if (payload.type === "rail_set") {
+                payload.name = String(payload.name || (this.meta.rails || ["12V_B"])[0]);
+                payload.enabled = this.logicBool(payload.enabled);
                 payload.delay_ms = Math.max(0, Number(payload.delay_ms) || 0);
               }
               if (payload.type === "servo_set") {

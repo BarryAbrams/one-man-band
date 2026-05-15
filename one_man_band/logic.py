@@ -289,6 +289,7 @@ class LogicEngine:
                 "animation_stop",
                 "timer_set",
                 "timer_end",
+                "rail_set",
                 "solenoid_set",
                 "solenoid_pulse",
                 "servo_set",
@@ -663,6 +664,14 @@ class LogicEngine:
                 timer = threading.Timer(delay_ms / 1000, self._run_solenoid_set, args=(action,))
                 timer.daemon = True
                 timer.start()
+        elif action_type == "rail_set":
+            delay_ms = max(0, int(action.get("delay_ms", 0) or 0))
+            if delay_ms <= 0:
+                self._run_rail_set(action, notify=False)
+            else:
+                timer = threading.Timer(delay_ms / 1000, self._run_rail_set, args=(action,))
+                timer.daemon = True
+                timer.start()
         elif action_type == "solenoid_pulse":
             delay_ms = max(0, int(action.get("delay_ms", 0) or 0))
             if delay_ms <= 0:
@@ -699,6 +708,15 @@ class LogicEngine:
         )
         state = "HIGH" if self._bool(action.get("enabled", True)) else "LOW"
         self._record_action_event("solenoid", "Solenoid", f"{action.get('name')} {state}")
+        if notify and self._on_action:
+            self._on_action()
+
+    def _run_rail_set(self, action: dict[str, Any], notify: bool = True) -> None:
+        name = str(action.get("name") or "")
+        enabled = self._bool(action.get("enabled", True))
+        self._controller.set_rails_enabled([name], enabled)
+        state = "ON" if enabled else "OFF"
+        self._record_action_event("rail", "Power rail", f"{name} {state}")
         if notify and self._on_action:
             self._on_action()
 

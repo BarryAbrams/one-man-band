@@ -26,7 +26,6 @@ animation_store = AnimationStore(base_dir / "data" / "animations.sqlite3")
 _poller_started = False
 _shutdown_event = threading.Event()
 STATE_POLL_SECONDS = 0.1
-BOOT_ENABLED_RAILS = ["12V_B", "12V_C"]
 NODE_TITLE = os.environ.get("OMB_NODE_TITLE", "Overworld Bar")
 
 
@@ -135,8 +134,6 @@ class AnimationRunner:
         target = track.get("target") or {}
         if track_type == "solenoid" and target.get("name"):
             self._controller.set_solenoid(str(target["name"]), self._bool(keyframe.get("value")))
-        elif track_type == "rail" and target.get("name"):
-            self._controller.set_rails_enabled([str(target["name"])], self._bool(keyframe.get("value")))
         elif track_type == "pixels":
             payload = self._pixel_animation_payload(track, keyframe)
             self._controller.animate_pixels(**payload)
@@ -502,12 +499,7 @@ def shutdown() -> None:
     controller.close()
 
 
-def _initialize_boot_hardware() -> None:
-    controller.set_rails_enabled(BOOT_ENABLED_RAILS, True)
-
-
 def _activate_node() -> None:
-    _initialize_boot_hardware()
     logic_engine.process_global_state("active")
 
 
@@ -516,7 +508,6 @@ def _quiet_node() -> None:
     audio_manager.stop()
     controller.clear_solenoids()
     controller.set_all_servos_enabled(False)
-    controller.set_all_rails(False)
     logic_engine.process_global_state("quiet")
 
 
@@ -538,7 +529,6 @@ def create_socketio(app: Flask) -> SocketIO:
     socketio.init_app(app)
 
     if not _poller_started:
-        _initialize_boot_hardware()
         logic_engine.run_boot_rules()
         node_control.start()
         socketio.start_background_task(_poll_state_forever)
@@ -571,15 +561,6 @@ def handle_rail_toggle(payload: dict[str, str]):
 def handle_rails_set_all(payload: dict[str, bool]):
     state = controller.set_all_rails(bool(payload["enabled"]))
     emit("state:update", state.to_payload(), broadcast=True)
-
-
-@socketio.on("rail:set")
-def handle_rail_set(payload: dict[str, object]):
-    try:
-        state = controller.set_rails_enabled([str(payload["name"])], bool(payload["enabled"]))
-        emit("state:update", state.to_payload(), broadcast=True)
-    except (KeyError, TypeError, ValueError) as exc:
-        emit("server:error", {"message": str(exc)})
 
 
 @socketio.on("solenoid:toggle")
