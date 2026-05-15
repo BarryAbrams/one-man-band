@@ -446,6 +446,7 @@
                   <button class="secondary" @click="addAnimationTrack('solenoid')">Add Relay</button>
                   <button class="secondary" @click="addAnimationTrack('servo')">Add Servo</button>
                   <button class="secondary" @click="addAnimationTrack('pixels')">Add Neopixels</button>
+                  <button class="secondary" @click="addAnimationTrack('dmx')">Add DMX</button>
                   <button class="secondary" @click="addAnimationTrack('audio')">Add Audio</button>
                 </div>
                 <div class="actions">
@@ -484,6 +485,10 @@
                             <option :value="name" x-text="relayLabels[name] || name"></option>
                           </template>
                         </select>
+                      </label>
+                      <label class="check-label">
+                        <input type="checkbox" x-model="selectedAnimationTrack().persist" @change="scheduleAnimationSave()">
+                        Persist after end
                       </label>
                     </div>
                   </template>
@@ -534,6 +539,19 @@
                           <input type="number" min="1" max="100" x-model.number="selectedAnimationTrack().target.count" @input="scheduleAnimationSave()">
                         </label>
                       </template>
+                      <label class="check-label">
+                        <input type="checkbox" x-model="selectedAnimationTrack().persist" @change="scheduleAnimationSave()">
+                        Persist after end
+                      </label>
+                    </div>
+                  </template>
+
+                  <template x-if="selectedAnimationTrack().type === 'dmx'">
+                    <div class="logic-row">
+                      <label class="field-label">
+                        Fixture Group Slug
+                        <input type="text" x-model="selectedAnimationTrack().target.fixture_group_slug" @input="scheduleAnimationSave()">
+                      </label>
                     </div>
                   </template>
 
@@ -596,10 +614,55 @@
                           </label>
                         </template>
                         <template x-if="selectedAnimationTrack().type === 'pixels'">
-                          <label class="field-label">
-                            Color
-                            <input type="color" x-model="keyframe.color" @input="scheduleAnimationSave()">
-                          </label>
+                          <div class="logic-row compact-row">
+                            <label class="field-label">
+                              Animation
+                              <select x-model.number="keyframe.animation_id" @change="scheduleAnimationSave()">
+                                <option :value="0">Color fade</option>
+                                <option :value="1">Candle flicker</option>
+                                <option :value="2">Lightning strike</option>
+                              </select>
+                            </label>
+                            <label class="field-label">
+                              <span x-text="Number(keyframe.animation_id || 0) === 1 ? 'Base' : 'Color'"></span>
+                              <input type="color" x-model="keyframe.color" @input="scheduleAnimationSave()">
+                            </label>
+                            <label class="field-label" x-show="Number(keyframe.animation_id || 0) === 1">
+                              Hue Variation
+                              <input type="number" min="0" max="255" x-model.number="keyframe.hue_variation" @input="scheduleAnimationSave()">
+                            </label>
+                            <label class="field-label" x-show="Number(keyframe.animation_id || 0) === 1">
+                              Seed
+                              <input type="number" min="0" max="255" x-model.number="keyframe.seed" @input="scheduleAnimationSave()">
+                            </label>
+                            <label class="field-label" x-show="Number(keyframe.animation_id || 0) === 1">
+                              Target Intensity
+                              <input type="number" min="0" max="255" x-model.number="keyframe.target_intensity" @input="scheduleAnimationSave()">
+                            </label>
+                          </div>
+                        </template>
+                        <template x-if="selectedAnimationTrack().type === 'dmx'">
+                          <div class="logic-row compact-row">
+                            <label class="field-label">
+                              State
+                              <select x-model="keyframe.state" @change="scheduleAnimationSave()">
+                                <option value="on">On</option>
+                                <option value="off">Off</option>
+                              </select>
+                            </label>
+                            <label class="field-label">
+                              Brightness
+                              <input type="text" placeholder="default or 0-255" x-model="keyframe.brightness" @input="scheduleAnimationSave()">
+                            </label>
+                            <label class="field-label">
+                              Color
+                              <input type="text" placeholder="default or #RRGGBB" x-model="keyframe.color" @input="scheduleAnimationSave()">
+                            </label>
+                            <label class="field-label">
+                              Duration ms
+                              <input type="number" min="0" x-model.number="keyframe.duration_ms" @input="scheduleAnimationSave()">
+                            </label>
+                          </div>
                         </template>
                         <template x-if="selectedAnimationTrack().type === 'audio'">
                           <span class="tile-subtitle">Audio starts here</span>
@@ -1690,8 +1753,17 @@
               return {
                 ...base,
                 label: "Neopixels",
+                persist: false,
                 target: { scope: "line", line: firstRail, start: 0, count: 1 },
-                keyframes: [{ time_ms: 0, color: "#0000ff" }],
+                keyframes: [this.defaultAnimationKeyframe("pixels", 0)],
+              };
+            }
+            if (type === "dmx") {
+              return {
+                ...base,
+                label: "DMX",
+                target: { fixture_group_slug: "bar-dragon" },
+                keyframes: [this.defaultAnimationKeyframe("dmx", 0)],
               };
             }
             if (type === "audio") {
@@ -1705,12 +1777,42 @@
             return {
               ...base,
               label: this.relayLabels[firstSolenoid] || firstSolenoid,
+              persist: false,
               target: { name: firstSolenoid },
               keyframes: [
                 { time_ms: 0, value: true },
                 { time_ms: 250, value: false },
               ],
             };
+          },
+
+          defaultAnimationKeyframe(type, timeMs = 0) {
+            if (type === "servo") {
+              return { time_ms: timeMs, value: 127, easing: "ease" };
+            }
+            if (type === "pixels") {
+              return {
+                time_ms: timeMs,
+                animation_id: 0,
+                color: "#0000ff",
+                hue_variation: 32,
+                seed: 17,
+                target_intensity: 255,
+              };
+            }
+            if (type === "dmx") {
+              return {
+                time_ms: timeMs,
+                state: "on",
+                brightness: "default",
+                color: "default",
+                duration_ms: 1000,
+              };
+            }
+            if (type === "audio") {
+              return { time_ms: timeMs, value: "start" };
+            }
+            return { time_ms: timeMs, value: true };
           },
 
           normalizeAnimation(animation) {
@@ -1722,13 +1824,35 @@
             normalized.timeline.tracks = (normalized.timeline.tracks || []).map((track) => {
               const defaults = this.defaultAnimationTrack(track.type || "solenoid");
               const keyframes = Array.isArray(track.keyframes) ? track.keyframes : defaults.keyframes;
+              const type = track.type || "solenoid";
               return {
                 ...defaults,
                 ...track,
                 target: { ...defaults.target, ...(track.target || {}) },
-                keyframes: track.type === "audio" ? [{ time_ms: Number(keyframes[0]?.time_ms || 0), value: "start" }] : keyframes,
+                persist: Boolean(track.persist ?? defaults.persist ?? false),
+                keyframes: type === "audio"
+                  ? [{ time_ms: Number(keyframes[0]?.time_ms || 0), value: "start" }]
+                  : keyframes.map((keyframe) => this.normalizeAnimationKeyframe(type, keyframe)),
               };
             });
+            return normalized;
+          },
+
+          normalizeAnimationKeyframe(type, keyframe) {
+            const normalized = { ...this.defaultAnimationKeyframe(type, Number(keyframe.time_ms || 0)), ...keyframe };
+            if (type === "pixels") {
+              normalized.animation_id = Number(normalized.animation_id || 0);
+              normalized.color = normalized.color || "#0000ff";
+              normalized.hue_variation = Number(normalized.hue_variation ?? 32);
+              normalized.seed = Number(normalized.seed ?? 17);
+              normalized.target_intensity = Number(normalized.target_intensity ?? 255);
+            }
+            if (type === "dmx") {
+              normalized.state = normalized.state === "off" ? "off" : "on";
+              normalized.brightness = normalized.brightness ?? "default";
+              normalized.color = normalized.color || "default";
+              normalized.duration_ms = Math.max(0, Number(normalized.duration_ms) || 0);
+            }
             return normalized;
           },
 
@@ -1810,6 +1934,21 @@
                   ...track,
                   keyframes: [...(track.keyframes || [])]
                     .map((keyframe) => track.type === "solenoid" ? { ...keyframe, value: this.logicBool(keyframe.value) } : keyframe)
+                    .map((keyframe) => track.type === "pixels" ? {
+                      ...keyframe,
+                      animation_id: Number(keyframe.animation_id || 0),
+                      color: keyframe.color || "#0000ff",
+                      hue_variation: Math.max(0, Math.min(255, Number(keyframe.hue_variation) || 0)),
+                      seed: Math.max(0, Math.min(255, Number(keyframe.seed) || 0)),
+                      target_intensity: Math.max(0, Math.min(255, Number(keyframe.target_intensity) || 0)),
+                    } : keyframe)
+                    .map((keyframe) => track.type === "dmx" ? {
+                      ...keyframe,
+                      state: keyframe.state === "off" ? "off" : "on",
+                      brightness: this.dmxValue(keyframe.brightness, "default"),
+                      color: String(keyframe.color || "default").trim() || "default",
+                      duration_ms: Math.max(0, Number(keyframe.duration_ms) || 0),
+                    } : keyframe)
                     .filter((_, index) => track.type !== "audio" || index === 0)
                     .map((keyframe) => track.type === "audio" ? { time_ms: Number(keyframe.time_ms || 0), value: "start" } : keyframe)
                     .sort((a, b) => Number(a.time_ms || 0) - Number(b.time_ms || 0)),
@@ -1869,11 +2008,13 @@
             }
             let keyframe = { time_ms: time };
             if (track.type === "servo") {
-              keyframe = { ...keyframe, value: 127, easing: "ease" };
+              keyframe = this.defaultAnimationKeyframe("servo", time);
             } else if (track.type === "pixels") {
-              keyframe = { ...keyframe, color: "#0000ff" };
+              keyframe = this.defaultAnimationKeyframe("pixels", time);
+            } else if (track.type === "dmx") {
+              keyframe = this.defaultAnimationKeyframe("dmx", time);
             } else if (track.type === "solenoid") {
-              keyframe = { ...keyframe, value: true };
+              keyframe = this.defaultAnimationKeyframe("solenoid", time);
             }
             track.keyframes = [...(track.keyframes || []), keyframe];
             this.sortAnimationKeyframes(track);
@@ -1918,6 +2059,9 @@
             if (track.type === "pixels") {
               return this.pixelTargetLabel(track.target);
             }
+            if (track.type === "dmx") {
+              return track.target.fixture_group_slug || "DMX group";
+            }
             return this.relayLabels[track.target.name] || track.target.name || "Relay";
           },
 
@@ -1954,6 +2098,9 @@
             }
             if (track.type === "pixels") {
               return this.pixelTimelineVisual(track);
+            }
+            if (track.type === "dmx") {
+              return this.dmxTimelineVisual(track);
             }
             if (track.type === "audio") {
               return this.audioTimelineVisual(track);
@@ -2022,6 +2169,21 @@
               const to = next?.color || from;
               const id = `grad-${track.id}-${index}`.replace(/[^A-Za-z0-9_-]/g, "");
               return `<defs><linearGradient id="${id}" x1="0%" x2="100%" y1="0%" y2="0%"><stop offset="0%" stop-color="${from}"></stop><stop offset="100%" stop-color="${to}"></stop></linearGradient></defs><rect class="pixel-band" x="${start}" y="22" width="${width}" height="56" fill="url(#${id})"></rect>`;
+            }).join("");
+          },
+
+          dmxTimelineVisual(track) {
+            const keyframes = this.sortedKeyframes(track);
+            if (!keyframes.length) {
+              return "";
+            }
+            return keyframes.map((keyframe, index) => {
+              const start = this.animationTimePercent(keyframe.time_ms);
+              const next = keyframes[index + 1];
+              const end = next ? this.animationTimePercent(next.time_ms) : 100;
+              const width = Math.max(0.5, end - start);
+              const fill = String(keyframe.color || "").startsWith("#") ? keyframe.color : (keyframe.state === "off" ? "#222222" : "#f2c14e");
+              return `<rect class="pixel-band" x="${start}" y="26" width="${width}" height="48" fill="${fill}"></rect>`;
             }).join("");
           },
 
@@ -2179,6 +2341,9 @@
               if (track.type === "audio") {
                 return;
               }
+              if (track.type === "dmx") {
+                return;
+              }
               if (track.type === "solenoid" && track.target?.name) {
                 const keyframe = this.keyframeAtTime(track, timeMs);
                 this.socket.emit("solenoid:set", { name: track.target.name, enabled: keyframe ? this.logicBool(keyframe.value) : false });
@@ -2226,12 +2391,17 @@
             }
             const relayNames = new Set(
               (this.animations.form.timeline.tracks || [])
-                .filter((track) => track.type === "solenoid" && track.target?.name)
+                .filter((track) => track.type === "solenoid" && track.target?.name && !track.persist)
                 .map((track) => track.target.name)
             );
             relayNames.forEach((name) => {
               this.socket.emit("solenoid:set", { name, enabled: false });
             });
+            (this.animations.form.timeline.tracks || [])
+              .filter((track) => track.type === "pixels" && !track.persist)
+              .forEach((track) => {
+                this.socket.emit("pixels:animate", this.pixelClearPayload(track));
+              });
           },
 
           stopAnimationAudio() {
@@ -2253,6 +2423,9 @@
             }
             if (track.type === "pixels") {
               this.socket.emit("pixels:animate", this.pixelAnimationPayload(track, keyframe));
+            }
+            if (track.type === "dmx") {
+              this.socket.emit("dmx:fade", this.dmxAnimationPayload(track, keyframe));
             }
             if (track.type === "audio" && track.target.filename) {
               this.socket.emit("audio:play", { filename: track.target.filename, speaker: track.target.speaker || "both" });
@@ -2299,9 +2472,9 @@
               start,
               count,
               start_rgb: this.hexToRgb(keyframe.color || "#000000"),
-              end_rgb: this.hexToRgb(next?.color || keyframe.color || "#000000"),
+              end_rgb: this.pixelEndRgb(keyframe, next),
               duration_ms: duration,
-              animation_id: 0,
+              animation_id: Number(keyframe.animation_id || 0),
             };
           },
 
@@ -2319,6 +2492,43 @@
               end_rgb: color,
               duration_ms: 1,
               animation_id: 0,
+            };
+          },
+
+          pixelClearPayload(track) {
+            const target = track.target || {};
+            const rails = target.scope === "all" ? (this.meta.pixel_rails || []) : [target.line || "1"];
+            const start = target.scope === "line" || target.scope === "all" ? 0 : Number(target.start || 0);
+            const count = target.scope === "pixel" ? 1 : (target.scope === "range" ? Number(target.count || 1) : 0);
+            return {
+              rails,
+              start,
+              count,
+              start_rgb: [0, 0, 0],
+              end_rgb: [0, 0, 0],
+              duration_ms: 0,
+              animation_id: 0,
+            };
+          },
+
+          pixelEndRgb(keyframe, next) {
+            if (Number(keyframe.animation_id || 0) === 1) {
+              return [
+                Math.max(0, Math.min(255, Number(keyframe.hue_variation) || 0)),
+                Math.max(0, Math.min(255, Number(keyframe.seed) || 0)),
+                Math.max(0, Math.min(255, Number(keyframe.target_intensity) || 0)),
+              ];
+            }
+            return this.hexToRgb(next?.color || keyframe.color || "#000000");
+          },
+
+          dmxAnimationPayload(track, keyframe) {
+            return {
+              fixture_group_slug: String(track.target?.fixture_group_slug || "bar-dragon").trim(),
+              state: keyframe.state === "off" ? "off" : "on",
+              brightness: this.dmxValue(keyframe.brightness, "default"),
+              color: String(keyframe.color || "default").trim() || "default",
+              duration_ms: Math.max(0, Number(keyframe.duration_ms) || 0),
             };
           },
 

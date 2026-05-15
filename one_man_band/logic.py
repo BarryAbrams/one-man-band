@@ -30,6 +30,17 @@ DEFAULT_DMX_BROKER_HOST = "192.168.0.153"
 DEFAULT_DMX_BROKER_PORT = 1883
 
 
+def publish_dmx_fade_payload(payload: dict[str, Any]) -> None:
+    if mqtt_publish is None:
+        raise RuntimeError("paho-mqtt is required for DMX fade actions")
+    mqtt_publish.single(
+        DMX_FADE_TOPIC,
+        payload=json.dumps(payload, sort_keys=True),
+        hostname=DEFAULT_DMX_BROKER_HOST,
+        port=DEFAULT_DMX_BROKER_PORT,
+    )
+
+
 @dataclass(slots=True)
 class LogicRule:
     id: int
@@ -745,12 +756,7 @@ class LogicEngine:
             self._record_action_event("dmx", "DMX failed", "Install paho-mqtt")
             return False
         try:
-            mqtt_publish.single(
-                DMX_FADE_TOPIC,
-                payload=json.dumps(payload, sort_keys=True),
-                hostname=DEFAULT_DMX_BROKER_HOST,
-                port=DEFAULT_DMX_BROKER_PORT,
-            )
+            publish_dmx_fade_payload(payload)
         except Exception as exc:
             self._record_action_event("dmx", "DMX failed", f"{DEFAULT_DMX_BROKER_HOST}: {exc}")
             return False

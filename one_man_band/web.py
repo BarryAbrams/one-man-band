@@ -13,7 +13,7 @@ from flask_socketio import SocketIO, emit
 from .animations import AnimationStore
 from .audio import AudioManager
 from .device import DeviceController
-from .logic import LogicEngine, LogicStore
+from .logic import LogicEngine, LogicStore, publish_dmx_fade_payload
 from .node_control import NodeControlMqttClient
 
 
@@ -138,6 +138,8 @@ class AnimationRunner:
         elif track_type == "pixels":
             payload = self._pixel_animation_payload(track, keyframe)
             self._controller.animate_pixels(**payload)
+        elif track_type == "dmx":
+            publish_dmx_fade_payload(self._dmx_payload(track, keyframe))
         elif track_type == "audio" and target.get("filename"):
             self._audio_manager.play(str(target["filename"]), str(target.get("speaker") or "both"))
         self._on_update()
@@ -178,16 +180,33 @@ class AnimationRunner:
             "start": self._pixel_start(target),
             "count": self._pixel_count(target),
             "start_rgb": self._hex_to_rgb(keyframe.get("color") or "#000000"),
-            "end_rgb": self._hex_to_rgb((next_keyframe or keyframe).get("color") or "#000000"),
+            "end_rgb": self._pixel_end_rgb(track, keyframe, next_keyframe),
             "duration_ms": duration_ms,
-            "animation_id": 0,
+            "animation_id": int(keyframe.get("animation_id", track.get("animation_id", 0)) or 0),
+        }
+
+    def _dmx_payload(self, track: dict[str, Any], keyframe: dict[str, Any]) -> dict[str, Any]:
+        target = track.get("target") or {}
+        brightness = keyframe.get("brightness", "default")
+        if brightness != "default":
+            brightness = max(0, min(255, int(brightness)))
+        return {
+            "hostname": os.uname().nodename,
+            "source": f"one_man_band.animation.{track.get('id', 'track')}",
+            "fixture_group_slug": str(target.get("fixture_group_slug") or "bar-dragon").strip(),
+            "duration_ms": max(0, int(keyframe.get("duration_ms", 1000) or 0)),
+            "state": str(keyframe.get("state") or "on"),
+            "brightness": brightness,
+            "color": str(keyframe.get("color") or "default").strip() or "default",
         }
 
     def _set_animation_relays_low(self, animation) -> None:
         for track in (animation.timeline or {}).get("tracks", []):
             target = track.get("target") or {}
-            if track.get("type") == "solenoid" and target.get("name"):
+            if track.get("type") == "solenoid" and target.get("name") and not track.get("persist"):
                 self._controller.set_solenoid(str(target["name"]), False)
+            if track.get("type") == "pixels" and not track.get("persist"):
+                self._clear_pixels(track)
 
     def _stop_animation_audio(self, animation) -> None:
         if any(track.get("type") == "audio" for track in (animation.timeline or {}).get("tracks", [])):
@@ -228,6 +247,33 @@ class AnimationRunner:
         if target.get("scope") == "range":
             return int(target.get("count") or 1)
         return 0
+
+    def _pixel_end_rgb(
+        self,
+        track: dict[str, Any],
+        keyframe: dict[str, Any],
+        next_keyframe: dict[str, Any] | None,
+    ) -> tuple[int, int, int]:
+        animation_id = int(keyframe.get("animation_id", track.get("animation_id", 0)) or 0)
+        if animation_id == 1:
+            return (
+                max(0, min(255, int(keyframe.get("hue_variation", 32) or 0))),
+                max(0, min(255, int(keyframe.get("seed", 17) or 0))),
+                max(0, min(255, int(keyframe.get("target_intensity", 255) or 0))),
+            )
+        return self._hex_to_rgb((next_keyframe or keyframe).get("color") or "#000000")
+
+    def _clear_pixels(self, track: dict[str, Any]) -> None:
+        target = track.get("target") or {}
+        self._controller.animate_pixels(
+            rail_mask=self._rail_mask(self._pixel_rails(target)),
+            start=self._pixel_start(target),
+            count=self._pixel_count(target),
+            start_rgb=(0, 0, 0),
+            end_rgb=(0, 0, 0),
+            duration_ms=0,
+            animation_id=0,
+        )
 
     def _rail_mask(self, rails: list[str]) -> int:
         mask = 0
@@ -619,6 +665,27 @@ def handle_pixels_animate(payload: dict[str, object]):
         )
         emit("state:update", {**state.to_payload(), "audio_status": audio_manager.status().to_payload()}, broadcast=True)
     except (KeyError, TypeError, ValueError) as exc:
+        emit("server:error", {"message": str(exc)})
+
+
+@socketio.on("dmx:fade")
+def handle_dmx_fade(payload: dict[str, object]):
+    try:
+        brightness = payload.get("brightness", "default")
+        if brightness != "default":
+            brightness = max(0, min(255, int(brightness)))
+        publish_dmx_fade_payload(
+            {
+                "hostname": os.uname().nodename,
+                "source": "one_man_band.animation_preview",
+                "fixture_group_slug": str(payload.get("fixture_group_slug") or "bar-dragon").strip(),
+                "duration_ms": max(0, int(payload.get("duration_ms", 1000) or 0)),
+                "state": str(payload.get("state") or "on"),
+                "brightness": brightness,
+                "color": str(payload.get("color") or "default").strip() or "default",
+            }
+        )
+    except (TypeError, ValueError, RuntimeError) as exc:
         emit("server:error", {"message": str(exc)})
 
 
