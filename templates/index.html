@@ -443,6 +443,7 @@
 
               <div class="animation-toolbar">
                 <div class="actions">
+                  <button class="secondary" @click="addAnimationTrack('rail')">Add Power Rail</button>
                   <button class="secondary" @click="addAnimationTrack('solenoid')">Add Relay</button>
                   <button class="secondary" @click="addAnimationTrack('servo')">Add Servo</button>
                   <button class="secondary" @click="addAnimationTrack('pixels')">Add Neopixels</button>
@@ -489,6 +490,19 @@
                       <label class="check-label">
                         <input type="checkbox" x-model="selectedAnimationTrack().persist" @change="scheduleAnimationSave()">
                         Persist after end
+                      </label>
+                    </div>
+                  </template>
+
+                  <template x-if="selectedAnimationTrack().type === 'rail'">
+                    <div class="logic-row">
+                      <label class="field-label">
+                        Power Rail
+                        <select x-model="selectedAnimationTrack().target.name" @change="scheduleAnimationSave()">
+                          <template x-for="name in meta.rails || []" :key="name">
+                            <option :value="name" x-text="railLabels[name]?.title || name"></option>
+                          </template>
+                        </select>
                       </label>
                     </div>
                   </template>
@@ -593,6 +607,15 @@
                             <select x-model="keyframe.value" @change="keyframe.value = logicBool(keyframe.value); scheduleAnimationSave()">
                               <option value="true">HIGH</option>
                               <option value="false">LOW</option>
+                            </select>
+                          </label>
+                        </template>
+                        <template x-if="selectedAnimationTrack().type === 'rail'">
+                          <label class="field-label">
+                            State
+                            <select x-model="keyframe.value" @change="keyframe.value = logicBool(keyframe.value); scheduleAnimationSave()">
+                              <option value="true">ON</option>
+                              <option value="false">OFF</option>
                             </select>
                           </label>
                         </template>
@@ -808,6 +831,7 @@
                             <option value="">Choose cause</option>
                             <option value="boot">Script boots</option>
                             <option value="gpio">GPIO changes</option>
+                            <option value="global_state">Global MQTT state</option>
                             <option value="timer">Timer countdown</option>
                           </select>
                         </label>
@@ -860,6 +884,18 @@
                               <input type="number" min="0" max="100" placeholder="Any" x-model="condition.percent">
                             </label>
                           </template>
+                        </div>
+                      </template>
+                      <template x-if="condition.type === 'global_state'">
+                        <div class="logic-row">
+                          <label class="field-label">
+                            State
+                            <select x-model="condition.state">
+                              <option value="active">Active / Open</option>
+                              <option value="quiet">Standby / Quiet</option>
+                              <option value="shutdown">Shutdown</option>
+                            </select>
+                          </label>
                         </div>
                       </template>
                     </section>
@@ -1740,7 +1776,19 @@
             const firstSolenoid = (this.meta.solenoids || ["P0"])[0];
             const firstServo = (this.meta.servos || [0])[0];
             const firstRail = (this.meta.pixel_rails || ["1"])[0];
+            const firstPowerRail = (this.meta.rails || ["12V_B"])[0];
             const base = { id, type, label: "", target: {}, keyframes: [] };
+            if (type === "rail") {
+              return {
+                ...base,
+                label: this.railLabels[firstPowerRail]?.title || firstPowerRail,
+                target: { name: firstPowerRail },
+                keyframes: [
+                  { time_ms: 0, value: true },
+                  { time_ms: 250, value: false },
+                ],
+              };
+            }
             if (type === "servo") {
               return {
                 ...base,
@@ -1787,6 +1835,9 @@
           },
 
           defaultAnimationKeyframe(type, timeMs = 0) {
+            if (type === "rail") {
+              return { time_ms: timeMs, value: true };
+            }
             if (type === "servo") {
               return { time_ms: timeMs, value: 127, easing: "ease" };
             }
@@ -1934,6 +1985,7 @@
                   ...track,
                   keyframes: [...(track.keyframes || [])]
                     .map((keyframe) => track.type === "solenoid" ? { ...keyframe, value: this.logicBool(keyframe.value) } : keyframe)
+                    .map((keyframe) => track.type === "rail" ? { ...keyframe, value: this.logicBool(keyframe.value) } : keyframe)
                     .map((keyframe) => track.type === "pixels" ? {
                       ...keyframe,
                       animation_id: Number(keyframe.animation_id || 0),
@@ -2013,8 +2065,8 @@
               keyframe = this.defaultAnimationKeyframe("pixels", time);
             } else if (track.type === "dmx") {
               keyframe = this.defaultAnimationKeyframe("dmx", time);
-            } else if (track.type === "solenoid") {
-              keyframe = this.defaultAnimationKeyframe("solenoid", time);
+            } else if (track.type === "solenoid" || track.type === "rail") {
+              keyframe = this.defaultAnimationKeyframe(track.type, time);
             }
             track.keyframes = [...(track.keyframes || []), keyframe];
             this.sortAnimationKeyframes(track);
@@ -2056,6 +2108,9 @@
             if (track.type === "servo") {
               return `Servo ${track.target.channel}`;
             }
+            if (track.type === "rail") {
+              return this.railLabels[track.target.name]?.title || track.target.name || "Power rail";
+            }
             if (track.type === "pixels") {
               return this.pixelTargetLabel(track.target);
             }
@@ -2091,6 +2146,9 @@
 
           timelineVisual(track) {
             if (track.type === "solenoid") {
+              return this.solenoidTimelineVisual(track);
+            }
+            if (track.type === "rail") {
               return this.solenoidTimelineVisual(track);
             }
             if (track.type === "servo") {
@@ -2344,6 +2402,10 @@
               if (track.type === "dmx") {
                 return;
               }
+              if (track.type === "rail" && track.target?.name) {
+                const keyframe = this.keyframeAtTime(track, timeMs);
+                this.socket.emit("rail:set", { name: track.target.name, enabled: keyframe ? this.logicBool(keyframe.value) : false });
+              }
               if (track.type === "solenoid" && track.target?.name) {
                 const keyframe = this.keyframeAtTime(track, timeMs);
                 this.socket.emit("solenoid:set", { name: track.target.name, enabled: keyframe ? this.logicBool(keyframe.value) : false });
@@ -2420,6 +2482,9 @@
             }
             if (track.type === "solenoid") {
               this.socket.emit("solenoid:set", { name: track.target.name, enabled: this.logicBool(keyframe.value) });
+            }
+            if (track.type === "rail") {
+              this.socket.emit("rail:set", { name: track.target.name, enabled: this.logicBool(keyframe.value) });
             }
             if (track.type === "pixels") {
               this.socket.emit("pixels:animate", this.pixelAnimationPayload(track, keyframe));
@@ -2539,6 +2604,9 @@
             }
             if (type === "boot") {
               return { type: "boot" };
+            }
+            if (type === "global_state") {
+              return { type: "global_state", state: "active" };
             }
             if (type === "timer" || this.isTimerCause(type)) {
               return { type: "timer", timer_name: "Timer1", timer_event: this.timerEventFromType(type), percent: "" };
@@ -2700,6 +2768,12 @@
                 timer_event: this.timerEventFromType(cause.type),
               };
             }
+            if (cause.type === "global_state") {
+              return {
+                ...cause,
+                state: this.globalStateValue(cause.state || "active"),
+              };
+            }
             return cause;
           },
 
@@ -2838,6 +2912,9 @@
                 payload.timer_name = this.sanitizeTimerName(payload.timer_name || "Timer1");
                 payload.timer_event = payload.timer_event || "ended";
               }
+              if (payload.type === "global_state") {
+                payload.state = this.globalStateValue(payload.state || "active");
+              }
               if (payload.type === "timer" && payload.timer_event === "position") {
                 if (payload.percent === "" || payload.percent === null || payload.percent === undefined) {
                   delete payload.percent;
@@ -2956,7 +3033,30 @@
               }
               return `${condition.timer_name || "Timer"} ended`;
             }
+            if (condition.type === "global_state") {
+              if (condition.state === "quiet") {
+                return "Global standby";
+              }
+              if (condition.state === "shutdown") {
+                return "Global shutdown";
+              }
+              return "Global active/open";
+            }
             return "Condition";
+          },
+
+          globalStateValue(value) {
+            const state = String(value || "active").trim().toLowerCase();
+            if (state === "open") {
+              return "active";
+            }
+            if (state === "standby") {
+              return "quiet";
+            }
+            if (["active", "quiet", "shutdown"].includes(state)) {
+              return state;
+            }
+            return "active";
           },
 
           logicBool(value) {

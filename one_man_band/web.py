@@ -135,6 +135,8 @@ class AnimationRunner:
         target = track.get("target") or {}
         if track_type == "solenoid" and target.get("name"):
             self._controller.set_solenoid(str(target["name"]), self._bool(keyframe.get("value")))
+        elif track_type == "rail" and target.get("name"):
+            self._controller.set_rails_enabled([str(target["name"])], self._bool(keyframe.get("value")))
         elif track_type == "pixels":
             payload = self._pixel_animation_payload(track, keyframe)
             self._controller.animate_pixels(**payload)
@@ -506,6 +508,7 @@ def _initialize_boot_hardware() -> None:
 
 def _activate_node() -> None:
     _initialize_boot_hardware()
+    logic_engine.process_global_state("active")
 
 
 def _quiet_node() -> None:
@@ -514,9 +517,11 @@ def _quiet_node() -> None:
     controller.clear_solenoids()
     controller.set_all_servos_enabled(False)
     controller.set_all_rails(False)
+    logic_engine.process_global_state("quiet")
 
 
 def _shutdown_node() -> None:
+    logic_engine.process_global_state("shutdown")
     controller.animate_pixels(
         rail_mask=0x0F,
         start=0,
@@ -566,6 +571,15 @@ def handle_rail_toggle(payload: dict[str, str]):
 def handle_rails_set_all(payload: dict[str, bool]):
     state = controller.set_all_rails(bool(payload["enabled"]))
     emit("state:update", state.to_payload(), broadcast=True)
+
+
+@socketio.on("rail:set")
+def handle_rail_set(payload: dict[str, object]):
+    try:
+        state = controller.set_rails_enabled([str(payload["name"])], bool(payload["enabled"]))
+        emit("state:update", state.to_payload(), broadcast=True)
+    except (KeyError, TypeError, ValueError) as exc:
+        emit("server:error", {"message": str(exc)})
 
 
 @socketio.on("solenoid:toggle")

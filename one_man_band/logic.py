@@ -280,6 +280,7 @@ class LogicEngine:
                 "boot",
                 "gpio",
                 "timer",
+                "global_state",
             ],
             "logic_action_types": [
                 "audio_play",
@@ -375,6 +376,30 @@ class LogicEngine:
                 fired.append(rule.name)
         return fired
 
+    def process_global_state(self, state: str) -> list[str]:
+        normalized_state = self._global_state_value(state)
+        fired: list[str] = []
+        for rule in self._store.list_rules():
+            if not rule.enabled:
+                continue
+            conditions = self._conditions(rule)
+            if not conditions or not all(condition.get("type") == "global_state" for condition in conditions):
+                continue
+            if all(self._global_state_value(condition.get("state")) == normalized_state for condition in conditions):
+                self._fire(rule)
+                fired.append(rule.name)
+        return fired
+
+    def _global_state_value(self, value: Any) -> str:
+        state = str(value or "active").strip().lower()
+        if state == "open":
+            return "active"
+        if state == "standby":
+            return "quiet"
+        if state in {"active", "quiet", "shutdown"}:
+            return state
+        return "active"
+
     def process_state(self, state: dict[str, Any]) -> list[str]:
         now = time.monotonic()
         self._update_timers(now)
@@ -460,6 +485,8 @@ class LogicEngine:
                 continue
             if condition_type == "boot":
                 continue
+            if condition_type == "global_state":
+                return False
             return False
 
         debounce_seconds = self._debounce_seconds(conditions)
