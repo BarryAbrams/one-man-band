@@ -34,6 +34,17 @@ pip install -r requirements.txt
 python app.py
 ```
 
+If DAC, I2C, or GPIO stops responding, run the hardware health check from the same
+virtualenv used by the app:
+
+```bash
+source .venv/bin/activate
+python scripts/pi_hardware_health.py
+```
+
+The script checks package imports, `/dev/i2c-1`, the RP2040 at address `0x12`,
+GPIO reads, ALSA device visibility, and pygame mixer initialization.
+
 ## Pi notes
 
 - Real hardware mode is the default. It expects the RP2040 at I2C address `0x12` on bus `1`.
