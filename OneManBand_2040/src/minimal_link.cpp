@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <Adafruit_NeoPixel.h>
 #include <Wire.h>
 
 namespace {
@@ -12,6 +13,10 @@ constexpr uint8_t k12vCEnablePin = 9;
 constexpr uint8_t k12vBEnablePin = 10;
 constexpr uint8_t k12vAEnablePin = 11;
 constexpr uint8_t k8vEnablePin = 12;
+constexpr uint8_t kPixel4Pin = 26;
+constexpr uint8_t kPixel3Pin = 27;
+constexpr uint8_t kPixel2Pin = 28;
+constexpr uint8_t kPixel1Pin = 29;
 
 constexpr uint8_t kTca9534Address = 0x20;
 constexpr uint8_t kTca9534OutputPortRegister = 0x01;
@@ -37,8 +42,12 @@ constexpr uint8_t kRailMask = 0x0F;
 constexpr uint8_t kRelayMask = 0x0F;
 constexpr uint8_t kServoCount = 8;
 constexpr uint8_t kPixelLineCount = 4;
+constexpr uint16_t kPixelsPerLine = 100;
 constexpr uint8_t kPixelCommandSize =
     kRegisterPixelCommandEnd - kRegisterPixelCommandStart + 1;
+constexpr uint8_t kPixelAnimationStatic = 0;
+constexpr uint8_t kPixelAnimationCandleFlicker = 1;
+constexpr unsigned long kCandleFlickerFrameMs = 45;
 
 constexpr uint8_t kCommandQueueSize = 8;
 constexpr uint8_t kMaxCommandBytes = 16;
@@ -58,6 +67,22 @@ struct Rgb {
   uint8_t r = 0;
   uint8_t g = 0;
   uint8_t b = 0;
+};
+
+struct PixelAnimation {
+  bool active = false;
+  uint8_t lineMask = 0;
+  uint16_t startIndex = 0;
+  uint16_t count = 0;
+  Rgb baseRgb = {};
+  uint8_t hueVariation = 0;
+  uint8_t seed = 0;
+  uint8_t startIntensity = 0;
+  uint8_t targetIntensity = 0;
+  unsigned long rampStartMs = 0;
+  uint16_t rampDurationMs = 0;
+  unsigned long nextFrameMs = 0;
+  uint16_t frameCounter = 0;
 };
 
 struct PixelLineState {
@@ -84,12 +109,20 @@ struct ControllerState {
 ControllerState gState;
 uint8_t gPixelCommand[kPixelCommandSize] = {};
 bool gTca9534Ready = false;
+PixelAnimation gPixelAnimation = {};
 
 constexpr RailOutput kRailOutputs[] = {
     {static_cast<uint8_t>(1u << 0), k12vAEnablePin, HIGH},
     {static_cast<uint8_t>(1u << 1), k12vBEnablePin, HIGH},
     {static_cast<uint8_t>(1u << 2), k12vCEnablePin, HIGH},
     {static_cast<uint8_t>(1u << 3), k8vEnablePin, LOW},
+};
+
+Adafruit_NeoPixel pixelLines[kPixelLineCount] = {
+    Adafruit_NeoPixel(kPixelsPerLine, kPixel1Pin, NEO_GRB + NEO_KHZ800),
+    Adafruit_NeoPixel(kPixelsPerLine, kPixel2Pin, NEO_GRB + NEO_KHZ800),
+    Adafruit_NeoPixel(kPixelsPerLine, kPixel3Pin, NEO_GRB + NEO_KHZ800),
+    Adafruit_NeoPixel(kPixelsPerLine, kPixel4Pin, NEO_GRB + NEO_KHZ800),
 };
 
 volatile I2cCommand gCommandQueue[kCommandQueueSize];
@@ -99,6 +132,8 @@ volatile uint32_t gQueuedCommandCount = 0;
 volatile uint32_t gDroppedCommandCount = 0;
 volatile uint8_t gLastRegisterPointer = kRegisterStatusSnapshot;
 volatile uint8_t gStatusSnapshot[kStatusSnapshotLength] = {};
+
+void printBinaryNibble(uint8_t value);
 
 void writeRailOutput(const RailOutput& output, bool enabled) {
   const uint8_t disabledLevel = output.enabledLevel == HIGH ? LOW : HIGH;
@@ -145,6 +180,200 @@ bool applyRelayOutputs(uint8_t relayMask) {
   }
   return writePeripheralRegister(kTca9534Address, kTca9534OutputPortRegister,
                                  relayMask & kRelayMask);
+}
+
+uint8_t maxRgbChannel(const Rgb& color) {
+  return max<uint8_t>(color.r, max<uint8_t>(color.g, color.b));
+}
+
+uint8_t minRgbChannel(const Rgb& color) {
+  return min<uint8_t>(color.r, min<uint8_t>(color.g, color.b));
+}
+
+uint8_t rgbHue(const Rgb& color) {
+  const uint8_t maxChannel = maxRgbChannel(color);
+  const uint8_t minChannel = minRgbChannel(color);
+  const uint8_t delta = maxChannel - minChannel;
+
+  if (delta == 0) {
+    return 0;
+  }
+
+  int16_t hue = 0;
+  if (maxChannel == color.r) {
+    hue = (43 * (static_cast<int16_t>(color.g) -
+                 static_cast<int16_t>(color.b))) /
+          delta;
+  } else if (maxChannel == color.g) {
+    hue = 85 + (43 * (static_cast<int16_t>(color.b) -
+                      static_cast<int16_t>(color.r))) /
+                     delta;
+  } else {
+    hue = 171 + (43 * (static_cast<int16_t>(color.r) -
+                       static_cast<int16_t>(color.g))) /
+                      delta;
+  }
+
+  if (hue < 0) {
+    hue += 255;
+  }
+  return static_cast<uint8_t>(hue);
+}
+
+uint8_t rgbSaturation(const Rgb& color) {
+  const uint8_t maxChannel = maxRgbChannel(color);
+  if (maxChannel == 0) {
+    return 0;
+  }
+  return static_cast<uint8_t>(((maxChannel - minRgbChannel(color)) * 255u) /
+                              maxChannel);
+}
+
+Rgb hsvRgb(uint8_t hue, uint8_t saturation, uint8_t value) {
+  const uint32_t packed =
+      Adafruit_NeoPixel::ColorHSV(static_cast<uint16_t>(hue) * 257u,
+                                  saturation, value);
+  const uint32_t rgb = Adafruit_NeoPixel::gamma32(packed);
+  return {
+      .r = static_cast<uint8_t>((rgb >> 16) & 0xFF),
+      .g = static_cast<uint8_t>((rgb >> 8) & 0xFF),
+      .b = static_cast<uint8_t>(rgb & 0xFF),
+  };
+}
+
+uint8_t animationHashByte(uint8_t seed, uint8_t lineIndex, uint16_t pixelIndex,
+                          uint16_t frameCounter, uint8_t salt) {
+  uint16_t value =
+      static_cast<uint16_t>((static_cast<uint16_t>(seed) << 8) |
+                            (lineIndex * 41u));
+  value ^= static_cast<uint16_t>(pixelIndex * 109u);
+  value ^= static_cast<uint16_t>(frameCounter * 251u);
+  value ^= static_cast<uint16_t>(salt * 199u);
+  value ^= static_cast<uint16_t>(value << 7);
+  value ^= static_cast<uint16_t>(value >> 9);
+  value = static_cast<uint16_t>((value * 2053u) + 13849u);
+  return static_cast<uint8_t>(value >> 8);
+}
+
+uint8_t scaleByte(uint8_t value, uint8_t scale) {
+  return static_cast<uint8_t>((static_cast<uint16_t>(value) * scale) / 255u);
+}
+
+uint8_t interpolateByte(uint8_t start, uint8_t end, uint8_t progress) {
+  const int16_t delta = static_cast<int16_t>(end) - static_cast<int16_t>(start);
+  return static_cast<uint8_t>(static_cast<int16_t>(start) +
+                              ((delta * progress) / 255));
+}
+
+uint8_t currentCandleIntensity(const PixelAnimation& animation,
+                               unsigned long now) {
+  if (animation.rampDurationMs == 0) {
+    return animation.targetIntensity;
+  }
+
+  const unsigned long elapsed = now - animation.rampStartMs;
+  const uint8_t progress =
+      elapsed >= animation.rampDurationMs
+          ? 255
+          : static_cast<uint8_t>((elapsed * 255UL) / animation.rampDurationMs);
+  return interpolateByte(animation.startIntensity, animation.targetIntensity,
+                         progress);
+}
+
+void showTargetedPixelLines(uint8_t lineMask) {
+  for (uint8_t lineIndex = 0; lineIndex < kPixelLineCount; ++lineIndex) {
+    if ((lineMask & static_cast<uint8_t>(1u << lineIndex)) != 0) {
+      pixelLines[lineIndex].show();
+    }
+  }
+}
+
+void fillPixelRange(uint8_t lineIndex, uint16_t startIndex, uint16_t count,
+                    const Rgb& color) {
+  if (lineIndex >= kPixelLineCount || startIndex >= kPixelsPerLine) {
+    return;
+  }
+
+  const uint16_t endIndex =
+      min<uint16_t>(kPixelsPerLine, static_cast<uint16_t>(startIndex + count));
+  const uint32_t packedColor =
+      pixelLines[lineIndex].Color(color.r, color.g, color.b);
+  for (uint16_t pixelIndex = startIndex; pixelIndex < endIndex; ++pixelIndex) {
+    pixelLines[lineIndex].setPixelColor(pixelIndex, packedColor);
+  }
+}
+
+void applyStaticPixels(uint8_t lineMask, uint16_t startIndex, uint16_t count,
+                       const Rgb& color) {
+  for (uint8_t lineIndex = 0; lineIndex < kPixelLineCount; ++lineIndex) {
+    if ((lineMask & static_cast<uint8_t>(1u << lineIndex)) != 0) {
+      fillPixelRange(lineIndex, startIndex, count, color);
+    }
+  }
+  showTargetedPixelLines(lineMask);
+}
+
+void applyCandleFrame(PixelAnimation& animation, unsigned long now) {
+  const uint8_t intensity = currentCandleIntensity(animation, now);
+  const uint8_t baseHue = rgbHue(animation.baseRgb);
+  const uint8_t saturation = rgbSaturation(animation.baseRgb);
+  const uint8_t baseValue = maxRgbChannel(animation.baseRgb);
+  const uint16_t endIndex =
+      min<uint16_t>(kPixelsPerLine,
+                    static_cast<uint16_t>(animation.startIndex +
+                                          animation.count));
+
+  for (uint8_t lineIndex = 0; lineIndex < kPixelLineCount; ++lineIndex) {
+    if ((animation.lineMask & static_cast<uint8_t>(1u << lineIndex)) == 0) {
+      continue;
+    }
+
+    for (uint16_t pixelIndex = animation.startIndex; pixelIndex < endIndex;
+         ++pixelIndex) {
+      const int16_t variation =
+          (static_cast<int16_t>(animationHashByte(
+               animation.seed, lineIndex, pixelIndex, animation.frameCounter,
+               3)) -
+           127) *
+          static_cast<int16_t>(animation.hueVariation) / 255;
+      const uint8_t hue = static_cast<uint8_t>(baseHue + variation);
+      const uint8_t brightnessNoise =
+          animationHashByte(animation.seed, lineIndex, pixelIndex,
+                            animation.frameCounter, 17);
+      const uint8_t brightnessScale =
+          static_cast<uint8_t>(145u + ((brightnessNoise * 110u) / 255u));
+      const uint8_t value =
+          scaleByte(scaleByte(baseValue, brightnessScale), intensity);
+      const Rgb color = hsvRgb(hue, saturation, value);
+      pixelLines[lineIndex].setPixelColor(
+          pixelIndex, pixelLines[lineIndex].Color(color.r, color.g, color.b));
+    }
+  }
+
+  showTargetedPixelLines(animation.lineMask);
+  ++animation.frameCounter;
+}
+
+void initializePixelLines() {
+  for (uint8_t lineIndex = 0; lineIndex < kPixelLineCount; ++lineIndex) {
+    pixelLines[lineIndex].begin();
+    pixelLines[lineIndex].setBrightness(64);
+    pixelLines[lineIndex].clear();
+    pixelLines[lineIndex].show();
+  }
+}
+
+void updatePixelAnimation() {
+  if (!gPixelAnimation.active) {
+    return;
+  }
+
+  const unsigned long now = millis();
+  if (now < gPixelAnimation.nextFrameMs) {
+    return;
+  }
+  gPixelAnimation.nextFrameMs = now + kCandleFlickerFrameMs;
+  applyCandleFrame(gPixelAnimation, now);
 }
 
 uint8_t snapshotChecksum(const uint8_t* snapshot) {
@@ -261,8 +490,54 @@ bool applyPixelCommandIfTriggered() {
     return false;
   }
 
-  bool changed = false;
   const uint8_t targetMask = gPixelCommand[0] & 0x0F;
+  if (targetMask == 0) {
+    gPixelCommand[kRegisterPixelTrigger - kRegisterPixelCommandStart] = 0;
+    return false;
+  }
+
+  const uint16_t startIndex = min<uint16_t>(gPixelCommand[1], kPixelsPerLine - 1);
+  uint16_t count = gPixelCommand[2];
+  if (count == 0 || startIndex + count > kPixelsPerLine) {
+    count = kPixelsPerLine - startIndex;
+  }
+  const Rgb baseRgb = {gPixelCommand[3], gPixelCommand[4], gPixelCommand[5]};
+  const Rgb paramRgb = {gPixelCommand[6], gPixelCommand[7], gPixelCommand[8]};
+  const uint16_t durationMs = littleEndianU16(gPixelCommand[9], gPixelCommand[10]);
+  const uint8_t animationId =
+      gPixelCommand[kRegisterPixelAnimationId - kRegisterPixelCommandStart];
+  const unsigned long now = millis();
+
+  if (animationId == kPixelAnimationCandleFlicker) {
+    const bool updatingCandle = gPixelAnimation.active;
+    gPixelAnimation = {
+        .active = true,
+        .lineMask = targetMask,
+        .startIndex = startIndex,
+        .count = count,
+        .baseRgb = baseRgb,
+        .hueVariation = paramRgb.r,
+        .seed = paramRgb.g,
+        .startIntensity = static_cast<uint8_t>(
+            updatingCandle ? currentCandleIntensity(gPixelAnimation, now) : 0),
+        .targetIntensity = paramRgb.b,
+        .rampStartMs = now,
+        .rampDurationMs = durationMs,
+        .nextFrameMs = now,
+        .frameCounter = static_cast<uint16_t>(
+            updatingCandle ? gPixelAnimation.frameCounter : 0),
+    };
+    applyCandleFrame(gPixelAnimation, now);
+  } else if (animationId == kPixelAnimationStatic) {
+    gPixelAnimation.active = false;
+    applyStaticPixels(targetMask, startIndex, count, baseRgb);
+  } else {
+    Serial.print("Unsupported pixel animation id=");
+    Serial.println(animationId);
+    gPixelCommand[kRegisterPixelTrigger - kRegisterPixelCommandStart] = 0;
+    return false;
+  }
+
   for (uint8_t line = 0; line < kPixelLineCount; ++line) {
     if ((targetMask & static_cast<uint8_t>(1u << line)) == 0) {
       continue;
@@ -270,19 +545,27 @@ bool applyPixelCommandIfTriggered() {
 
     PixelLineState& pixelLine = gState.pixelLines[line];
     pixelLine.active = true;
-    pixelLine.animationId =
-        gPixelCommand[kRegisterPixelAnimationId - kRegisterPixelCommandStart];
-    pixelLine.start = gPixelCommand[1];
-    pixelLine.count = gPixelCommand[2];
-    pixelLine.startRgb = {gPixelCommand[3], gPixelCommand[4], gPixelCommand[5]};
-    pixelLine.endRgb = {gPixelCommand[6], gPixelCommand[7], gPixelCommand[8]};
-    pixelLine.durationMs = littleEndianU16(gPixelCommand[9], gPixelCommand[10]);
+    pixelLine.animationId = animationId;
+    pixelLine.start = static_cast<uint8_t>(startIndex);
+    pixelLine.count = static_cast<uint8_t>(count);
+    pixelLine.startRgb = baseRgb;
+    pixelLine.endRgb = paramRgb;
+    pixelLine.durationMs = durationMs;
     ++pixelLine.updateCount;
-    changed = true;
   }
 
   gPixelCommand[kRegisterPixelTrigger - kRegisterPixelCommandStart] = 0;
-  return changed;
+  Serial.print("Pixel animation started, id=");
+  Serial.print(animationId);
+  Serial.print(" lines=0b");
+  printBinaryNibble(targetMask);
+  Serial.print(" start=");
+  Serial.print(startIndex);
+  Serial.print(" count=");
+  Serial.print(count);
+  Serial.print(" durationMs=");
+  Serial.println(durationMs);
+  return true;
 }
 
 bool applyRegisterWrite(uint8_t registerAddress, const uint8_t* values,
@@ -403,6 +686,7 @@ void setup() {
 
   configureRailOutputs();
   applyRailOutputs(gState.railMask);
+  initializePixelLines();
 
   Wire.setSDA(kPeripheralI2cSdaPin);
   Wire.setSCL(kPeripheralI2cSclPin);
@@ -429,6 +713,8 @@ void setup() {
 }
 
 void loop() {
+  updatePixelAnimation();
+
   I2cCommand command;
   bool changed = false;
   while (popCommand(command)) {

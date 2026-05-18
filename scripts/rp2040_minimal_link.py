@@ -12,10 +12,13 @@ I2C_BUS = 1
 ADDRESS = 0x12
 REG_RAILS = 0x01
 REG_RELAYS = 0x02
+REG_PIXEL_COMMAND = 0x40
 REG_STATUS_SNAPSHOT = 0x60
 STATUS_SNAPSHOT_LENGTH = 16
 STATUS_MAGIC = 0xA5
 STATUS_VERSION = 1
+PIXEL_ANIMATION_STATIC = 0
+PIXEL_ANIMATION_CANDLE = 1
 
 RAILS = (
     ("1", "12V_A", 1 << 0),
@@ -71,10 +74,37 @@ def push_state(bus: SMBus, state: ControlState) -> None:
     bus.write_byte_data(ADDRESS, REG_RELAYS, state.relay_mask & 0x0F)
 
 
+def write_pixel_command(
+    bus: SMBus,
+    *,
+    line_mask: int,
+    animation_id: int,
+    base_rgb: tuple[int, int, int],
+    param_rgb: tuple[int, int, int],
+    duration_ms: int,
+) -> None:
+    command = [
+        line_mask & 0x0F,
+        0,  # start pixel
+        0,  # count 0 means through the end of the line
+        base_rgb[0] & 0xFF,
+        base_rgb[1] & 0xFF,
+        base_rgb[2] & 0xFF,
+        param_rgb[0] & 0xFF,
+        param_rgb[1] & 0xFF,
+        param_rgb[2] & 0xFF,
+        duration_ms & 0xFF,
+        (duration_ms >> 8) & 0xFF,
+        1,  # trigger
+        animation_id & 0xFF,
+    ]
+    bus.write_i2c_block_data(ADDRESS, REG_PIXEL_COMMAND, command)
+
+
 def draw(screen, state: ControlState, message: str) -> None:
     screen.erase()
     screen.addstr(0, 0, "Minimal Pi -> RP2040 control")
-    screen.addstr(2, 0, "Rails: 1-4. Relays: Q/W/E/R. S pulls from Arduino. P pushes. Esc quits.")
+    screen.addstr(2, 0, "Rails: 1-4. Relays: Q/W/E/R. C candle. X clear. S pull. P push. Esc quit.")
     screen.addstr(4, 0, f"target address: 0x{ADDRESS:02x} on /dev/i2c-{I2C_BUS}")
     screen.addstr(5, 0, f"rail mask: 0x{state.rail_mask:02x} / 0b{state.rail_mask:04b}")
 
@@ -143,6 +173,42 @@ def main(screen) -> None:
                     message = "Pushed Python state to Arduino."
                 except OSError as exc:
                     message = f"Arduino state push failed: {exc}"
+                time.sleep(0.03)
+                continue
+
+            if key in (ord("c"), ord("C")):
+                try:
+                    write_pixel_command(
+                        bus,
+                        line_mask=0x0F,
+                        animation_id=PIXEL_ANIMATION_CANDLE,
+                        base_rgb=(255, 96, 18),
+                        param_rgb=(32, 17, 230),
+                        duration_ms=1000,
+                    )
+                    time.sleep(0.02)
+                    state = read_state(bus)
+                    message = "Started candle flicker on all pixel lines."
+                except OSError as exc:
+                    message = f"Pixel candle command failed: {exc}"
+                time.sleep(0.03)
+                continue
+
+            if key in (ord("x"), ord("X")):
+                try:
+                    write_pixel_command(
+                        bus,
+                        line_mask=0x0F,
+                        animation_id=PIXEL_ANIMATION_STATIC,
+                        base_rgb=(0, 0, 0),
+                        param_rgb=(0, 0, 0),
+                        duration_ms=0,
+                    )
+                    time.sleep(0.02)
+                    state = read_state(bus)
+                    message = "Cleared all pixel lines."
+                except OSError as exc:
+                    message = f"Pixel clear command failed: {exc}"
                 time.sleep(0.03)
                 continue
 
