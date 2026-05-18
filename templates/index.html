@@ -233,9 +233,8 @@
             <section class="audio-card">
               <span class="tile-title">Animation</span>
               <div class="mode-picker">
-                <button class="pill-button" :class="pixels.animation_id === 0 ? 'active' : ''" @click="pixels.animation_id = 0">Fade</button>
+                <button class="pill-button" :class="pixels.animation_id === 0 ? 'active' : ''" @click="pixels.animation_id = 0">Static</button>
                 <button class="pill-button" :class="pixels.animation_id === 1 ? 'active' : ''" @click="pixels.animation_id = 1">Candle</button>
-                <button class="pill-button" :class="pixels.animation_id === 2 ? 'active' : ''" @click="pixels.animation_id = 2">Lightning</button>
               </div>
               <div class="color-grid">
                 <label class="field-label" for="pixel-start-color">
@@ -262,7 +261,7 @@
               <p class="tile-subtitle panel-note" x-show="pixels.animation_id === 1">
                 Candle flicker stays active until another pixel command replaces it. Ramp ms changes intensity over time; 0 jumps immediately.
               </p>
-              <div class="pixel-preview" :class="{ candle: pixels.animation_id === 1, lightning: pixels.animation_id === 2 }" :style="pixelPreviewStyle()"></div>
+              <div class="pixel-preview" :class="{ candle: pixels.animation_id === 1 }" :style="pixelPreviewStyle()"></div>
               <div class="actions">
                 <button class="secondary" @click="sendPixelAnimation()" x-text="pixelSendLabel()"></button>
                 <button class="secondary" @click="blackoutPixels()">Blackout</button>
@@ -586,9 +585,8 @@
                             <label class="field-label">
                               Animation
                               <select x-model.number="keyframe.animation_id" @change="scheduleAnimationSave()">
-                                <option :value="0">Color fade</option>
+                                <option :value="0">Static color</option>
                                 <option :value="1">Candle flicker</option>
-                                <option :value="2">Lightning strike</option>
                               </select>
                             </label>
                             <label class="field-label">
@@ -1053,9 +1051,8 @@
                           <label class="field-label">
                             Animation
                             <select x-model.number="action.animation_id">
-                              <option :value="0">Color fade</option>
+                              <option :value="0">Static color</option>
                               <option :value="1">Candle flicker</option>
-                              <option :value="2">Lightning strike</option>
                             </select>
                           </label>
                           <label class="field-label">
@@ -1345,9 +1342,8 @@
                           <label class="field-label">
                             Animation
                             <select x-model.number="action.animation_id">
-                              <option :value="0">Color fade</option>
+                              <option :value="0">Static color</option>
                               <option :value="1">Candle flicker</option>
-                              <option :value="2">Lightning strike</option>
                             </select>
                           </label>
                           <label class="field-label">
@@ -1538,8 +1534,8 @@
             all_rails: false,
             start: 0,
             count: 0,
-            animation_id: 0,
-            start_color: "#000000",
+            animation_id: 1,
+            start_color: "#ff0000",
             end_color: "#0000ff",
             hue_variation: 32,
             seed: 17,
@@ -3163,18 +3159,12 @@
             if (this.pixels.animation_id === 1) {
               return "Start Candle";
             }
-            if (this.pixels.animation_id === 2) {
-              return "Strike Lightning";
-            }
-            return "Send Fade";
+            return "Send Static";
           },
 
           pixelPreviewStyle() {
             if (this.pixels.animation_id === 1) {
               return `background: linear-gradient(90deg, ${this.pixels.start_color}, #ffd46b, ${this.pixels.start_color})`;
-            }
-            if (this.pixels.animation_id === 2) {
-              return `background: linear-gradient(90deg, ${this.pixels.start_color}, ${this.pixels.end_color}, ${this.pixels.start_color})`;
             }
             return `background: linear-gradient(90deg, ${this.pixels.start_color}, ${this.pixels.end_color})`;
           },

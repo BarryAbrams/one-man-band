@@ -23,17 +23,16 @@ REG_VERSION: Final[int] = 0x00
 REG_RAILS: Final[int] = 0x01
 REG_SOLENOIDS: Final[int] = 0x02
 REG_ALARMS: Final[int] = 0x03
-REG_SERVO_ENABLE_MASK: Final[int] = 0x05
-REG_SERVO_BASE: Final[int] = 0x10
 REG_PIXEL_COMMAND: Final[int] = 0x40
 REG_STATUS_SNAPSHOT: Final[int] = 0x60
-STATUS_SNAPSHOT_LENGTH: Final[int] = 24
+STATUS_SNAPSHOT_LENGTH: Final[int] = 8
+STATUS_SNAPSHOT_MAGIC: Final[int] = 0xA5
 STATUS_SNAPSHOT_VERSION: Final[int] = 2
 STATUS_SNAPSHOT_CHECKSUM_INDEX: Final[int] = STATUS_SNAPSHOT_LENGTH - 1
 
-PIXEL_ANIMATION_FADE: Final[int] = 0
+PIXEL_ANIMATION_STATIC: Final[int] = 0
+PIXEL_ANIMATION_FADE: Final[int] = PIXEL_ANIMATION_STATIC
 PIXEL_ANIMATION_CANDLE_FLICKER: Final[int] = 1
-PIXEL_ANIMATION_LIGHTNING_STRIKE: Final[int] = 2
 
 RAILS: Final[dict[str, int]] = {
     "12V_A": 1 << 0,
@@ -41,7 +40,9 @@ RAILS: Final[dict[str, int]] = {
     "12V_C": 1 << 2,
     "8V": 1 << 3,
 }
-FIXED_RAIL_STATE: Final[int] = RAILS["12V_B"] | RAILS["12V_C"] | RAILS["8V"]
+FIXED_RAIL_STATE: Final[int] = (
+    RAILS["12V_A"] | RAILS["12V_B"] | RAILS["12V_C"] | RAILS["8V"]
+)
 
 SOLENOIDS: Final[dict[str, int]] = {
     "P0": 1 << 0,
@@ -64,7 +65,7 @@ GPIO_INPUTS: Final[dict[str, int]] = {
     "6": 17,
 }
 
-SERVO_CHANNELS: Final[tuple[int, ...]] = tuple(range(8))
+SERVO_CHANNELS: Final[tuple[int, ...]] = ()
 
 PIXEL_RAILS: Final[dict[str, int]] = {
     "1": 1 << 0,
@@ -74,17 +75,13 @@ PIXEL_RAILS: Final[dict[str, int]] = {
 }
 
 PIXEL_ANIMATIONS: Final[dict[str, dict[str, object]]] = {
-    "fade": {
-        "id": PIXEL_ANIMATION_FADE,
-        "label": "Color Fade",
+    "static": {
+        "id": PIXEL_ANIMATION_STATIC,
+        "label": "Static Color",
     },
     "candle": {
         "id": PIXEL_ANIMATION_CANDLE_FLICKER,
         "label": "Candle Flicker",
-    },
-    "lightning": {
-        "id": PIXEL_ANIMATION_LIGHTNING_STRIKE,
-        "label": "Lightning Strike",
     },
 }
 
@@ -152,7 +149,6 @@ class DeviceController:
         self._gpio_mode = os.environ.get("OMB_GPIO_PULL", "up").strip().lower()
         self._gpio_ready = False
         self._gpio_error = ""
-        self._servo_value_cache: dict[int, int] = {}
         self._state = DeviceState(
             version=2 if self._mock_mode else 0,
             rails=FIXED_RAIL_STATE if self._mock_mode else 0,
@@ -160,7 +156,7 @@ class DeviceController:
             connected=self._mock_mode,
             backend="mock" if self._mock_mode else "i2c",
             status_source="mock" if self._mock_mode else "unknown",
-            servo_values=[127 for _ in SERVO_CHANNELS],
+            servo_values=[],
             ina_voltage_mv={},
             ina_current_ma={},
             gpio_inputs={name: False for name in GPIO_INPUTS},
@@ -227,7 +223,7 @@ class DeviceController:
         return bus.read_byte(DEVICE)
 
     def _write_reg(self, bus: SMBus, reg: int, value: int) -> None:
-        bus.write_i2c_block_data(DEVICE, reg, [value & 0xFF])
+        bus.write_byte_data(DEVICE, reg, value & 0xFF)
 
     def _write_block(self, bus: SMBus, reg: int, values: list[int]) -> None:
         bus.write_i2c_block_data(DEVICE, reg, [value & 0xFF for value in values])
@@ -244,16 +240,9 @@ class DeviceController:
             self._state.rails = FIXED_RAIL_STATE
         elif reg == REG_SOLENOIDS:
             self._state.solenoids = value & 0x0F
-        elif reg == REG_SERVO_ENABLE_MASK:
-            self._state.servo_enable_mask = value & 0xFF
-        elif REG_SERVO_BASE <= reg < REG_SERVO_BASE + len(SERVO_CHANNELS):
-            if self._state.servo_values is None:
-                self._state.servo_values = [127 for _ in SERVO_CHANNELS]
-            self._state.servo_values[reg - REG_SERVO_BASE] = value & 0xFF
-            self._servo_value_cache[reg - REG_SERVO_BASE] = value & 0xFF
 
     def _snapshot_checksum(self, data: list[int]) -> int:
-        return sum(data[:STATUS_SNAPSHOT_CHECKSUM_INDEX]) & 0xFF
+        return (-sum(data[:STATUS_SNAPSHOT_CHECKSUM_INDEX])) & 0xFF
 
     def _read_snapshot_state(
         self,
@@ -266,8 +255,10 @@ class DeviceController:
             raise OSError(
                 f"Invalid RP2040 snapshot length: expected {STATUS_SNAPSHOT_LENGTH}, got {len(data)}"
             )
-        if data[0] != STATUS_SNAPSHOT_VERSION:
-            raise OSError(f"Unsupported RP2040 snapshot version: {data[0]}")
+        if data[0] != STATUS_SNAPSHOT_MAGIC:
+            raise OSError(f"Invalid RP2040 snapshot magic: 0x{data[0]:02x}")
+        if data[1] != STATUS_SNAPSHOT_VERSION:
+            raise OSError(f"Unsupported RP2040 snapshot version: {data[1]}")
         expected_checksum = self._snapshot_checksum(data)
         actual_checksum = data[STATUS_SNAPSHOT_CHECKSUM_INDEX]
         if actual_checksum != expected_checksum:
@@ -276,13 +267,13 @@ class DeviceController:
             )
 
         return DeviceState(
-            version=data[0],
+            version=data[1],
             rails=data[2],
             solenoids=data[3],
-            alarms=data[4],
+            alarms=0,
             ina_presence=0,
-            servo_enable_mask=data[6],
-            servo_values=data[7:15],
+            servo_enable_mask=0,
+            servo_values=[],
             ina_voltage_mv={},
             ina_current_ma={},
             connected=True,
@@ -291,6 +282,14 @@ class DeviceController:
             status_source="i2c_snapshot",
             gpio_inputs=gpio_inputs,
             gpio_error=gpio_error,
+            pixel_command={
+                **(self._state.pixel_command or {}),
+                "active_mask": data[4] & 0x0F,
+                "active_rails": [
+                    name for name, mask in PIXEL_RAILS.items() if data[4] & mask
+                ],
+                "tca9534_ready": bool(data[5]),
+            },
         )
 
     def _read_from_bus(self) -> DeviceState:
@@ -307,33 +306,21 @@ class DeviceController:
 
         try:
             with SMBus(I2C_BUS) as bus:
-                try:
-                    return self._with_fixed_rails(
-                        self._read_snapshot_state(bus, gpio_inputs, gpio_error)
-                    )
-                except OSError:
-                    pass
-
-                servo_values = [
-                    self._read_reg(bus, REG_SERVO_BASE + channel) for channel in SERVO_CHANNELS
-                ]
-                return self._with_fixed_rails(DeviceState(
-                    version=self._read_reg(bus, REG_VERSION),
-                    rails=FIXED_RAIL_STATE,
-                    solenoids=self._read_reg(bus, REG_SOLENOIDS),
-                    servo_enable_mask=self._read_reg(bus, REG_SERVO_ENABLE_MASK),
-                    servo_values=servo_values,
-                    alarms=self._read_reg(bus, REG_ALARMS),
-                    ina_presence=0,
-                    ina_voltage_mv={},
-                    ina_current_ma={},
-                    connected=True,
-                    error="",
+                last_error: OSError | None = None
+                for _attempt in range(5):
+                    try:
+                        return self._with_fixed_rails(
+                            self._read_snapshot_state(bus, gpio_inputs, gpio_error)
+                        )
+                    except OSError as exc:
+                        last_error = exc
+                return DeviceState(
+                    connected=False,
+                    error=str(last_error or "RP2040 status read failed"),
                     backend="i2c",
-                    status_source="i2c_registers",
                     gpio_inputs=gpio_inputs,
                     gpio_error=gpio_error,
-                ))
+                )
         except OSError as exc:
             return DeviceState(
                 connected=False,
@@ -359,8 +346,10 @@ class DeviceController:
 
             self._state = self._read_from_bus()
             self._state.gpio_input_overrides = overrides
-            self._state.pixel_command = pixel_command
-            self._apply_servo_value_cache()
+            self._state.pixel_command = {
+                **pixel_command,
+                **(self._state.pixel_command or {}),
+            }
             return DeviceState(**asdict(self._state))
 
     def read_cached_state(self, refresh_gpio: bool = True) -> DeviceState:
@@ -409,7 +398,6 @@ class DeviceController:
                 self._state.status_source = "i2c_write_cache"
                 self._state.gpio_input_overrides = overrides
                 self._state.pixel_command = pixel_command
-                self._apply_servo_value_cache()
             except OSError as exc:
                 gpio_inputs, gpio_error = self._read_gpio_inputs()
                 self._state = DeviceState(
@@ -498,31 +486,18 @@ class DeviceController:
             return DeviceState(**asdict(self._state))
 
     def set_servo_enabled(self, channel: int, enabled: bool) -> DeviceState:
-        if channel not in SERVO_CHANNELS:
-            raise ValueError(f"Unknown servo channel: {channel}")
-        state = self.read_cached_state(refresh_gpio=False)
-        mask = 1 << channel
-        value = (state.servo_enable_mask | mask) if enabled else (state.servo_enable_mask & ~mask)
-        return self._update_register(REG_SERVO_ENABLE_MASK, value)
+        return self.read_cached_state(refresh_gpio=False)
 
     def set_all_servos_enabled(self, enabled: bool) -> DeviceState:
-        return self._update_register(REG_SERVO_ENABLE_MASK, 0xFF if enabled else 0x00)
+        return self.read_cached_state(refresh_gpio=False)
 
     def set_servo_value(self, channel: int, value: int) -> DeviceState:
-        if channel not in SERVO_CHANNELS:
-            raise ValueError(f"Unknown servo channel: {channel}")
         if not 0 <= value <= 255:
             raise ValueError(f"Servo value must be between 0 and 255: {value}")
-        return self._update_register(REG_SERVO_BASE + channel, value)
+        return self.read_cached_state(refresh_gpio=False)
 
     def _apply_servo_value_cache(self) -> None:
-        if not self._servo_value_cache:
-            return
-        if self._state.servo_values is None:
-            self._state.servo_values = [0 for _ in SERVO_CHANNELS]
-        for channel, value in self._servo_value_cache.items():
-            if channel in SERVO_CHANNELS:
-                self._state.servo_values[channel] = value & 0xFF
+        return
 
     def animate_pixels(
         self,
@@ -543,9 +518,8 @@ class DeviceController:
         if not 0 <= duration_ms <= 65535:
             raise ValueError(f"Duration must be between 0 and 65535 ms: {duration_ms}")
         if animation_id not in {
-            PIXEL_ANIMATION_FADE,
+            PIXEL_ANIMATION_STATIC,
             PIXEL_ANIMATION_CANDLE_FLICKER,
-            PIXEL_ANIMATION_LIGHTNING_STRIKE,
         }:
             raise ValueError(f"Unknown pixel animation ID: {animation_id}")
         for channel_name, rgb in (("base", start_rgb), ("parameter", end_rgb)):
