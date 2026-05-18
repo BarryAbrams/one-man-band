@@ -381,6 +381,7 @@ class DeviceController:
                 with SMBus(I2C_BUS) as bus:
                     self._write_reg(bus, reg, value)
                     wrote_to_i2c = True
+                time.sleep(0.05)
                 self._state = self._read_from_bus()
                 self._state.gpio_input_overrides = overrides
                 self._state.pixel_command = pixel_command
