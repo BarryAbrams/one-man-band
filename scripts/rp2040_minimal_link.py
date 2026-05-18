@@ -10,13 +10,12 @@ from smbus2 import SMBus
 
 I2C_BUS = 1
 ADDRESS = 0x12
-REG_RAILS = 0x01
 REG_RELAYS = 0x02
 REG_PIXEL_COMMAND = 0x40
 REG_STATUS_SNAPSHOT = 0x60
-STATUS_SNAPSHOT_LENGTH = 16
+STATUS_SNAPSHOT_LENGTH = 8
 STATUS_MAGIC = 0xA5
-STATUS_VERSION = 1
+STATUS_VERSION = 2
 PIXEL_ANIMATION_STATIC = 0
 PIXEL_ANIMATION_CANDLE = 1
 
@@ -44,10 +43,8 @@ PIXEL_LINES = (
 
 @dataclass
 class ControlState:
-    rail_mask: int = 0x0E
+    rail_mask: int = 0x0F
     relay_mask: int = 0x00
-    servo_enable_mask: int = 0x00
-    servo_values: list[int] | None = None
     pixel_active_mask: int = 0x00
     tca_ready: bool = False
 
@@ -69,10 +66,8 @@ def _read_state_once(bus: SMBus) -> ControlState:
     return ControlState(
         rail_mask=data[2] & 0x0F,
         relay_mask=data[3] & 0x0F,
-        servo_enable_mask=data[4],
-        servo_values=list(data[5:13]),
-        pixel_active_mask=data[13] & 0x0F,
-        tca_ready=bool(data[14]),
+        pixel_active_mask=data[4] & 0x0F,
+        tca_ready=bool(data[5]),
     )
 
 
@@ -88,7 +83,6 @@ def read_state(bus: SMBus, attempts: int = 5) -> ControlState:
 
 
 def push_state(bus: SMBus, state: ControlState) -> None:
-    bus.write_byte_data(ADDRESS, REG_RAILS, state.rail_mask & 0x0F)
     bus.write_byte_data(ADDRESS, REG_RELAYS, state.relay_mask & 0x0F)
 
 
@@ -122,15 +116,15 @@ def write_pixel_command(
 def draw(screen, state: ControlState, candle_mask: int, message: str) -> None:
     screen.erase()
     screen.addstr(0, 0, "Minimal Pi -> RP2040 control")
-    screen.addstr(2, 0, "Rails: 1-4. Relays: Q/W/E/R. Candles: A/S/D/F. X fade selected off.")
-    screen.addstr(3, 0, "Shift-S pulls Arduino state. P pushes. Esc quits.")
+    screen.addstr(2, 0, "Relays: Q/W/E/R. Candles: A/S/D/F. X fade selected off.")
+    screen.addstr(3, 0, "Rails are fixed on in firmware. Shift-S pulls. P pushes relays. Esc quits.")
     screen.addstr(4, 0, f"target address: 0x{ADDRESS:02x} on /dev/i2c-{I2C_BUS}")
     screen.addstr(5, 0, f"rail mask: 0x{state.rail_mask:02x} / 0b{state.rail_mask:04b}")
 
     row = 7
-    for key, name, mask in RAILS:
+    for _, name, mask in RAILS:
         label = "ON " if state.rail_mask & mask else "OFF"
-        screen.addstr(row, 0, f"{key}: {name:<5} {label}")
+        screen.addstr(row, 0, f"rail {name:<5} {label}")
         row += 1
 
     row += 1
@@ -154,8 +148,7 @@ def draw(screen, state: ControlState, candle_mask: int, message: str) -> None:
     screen.addstr(
         row,
         0,
-        f"arduino extras: servo_enable=0x{state.servo_enable_mask:02x} "
-        f"pixel_active=0b{state.pixel_active_mask:04b} "
+        f"arduino extras: pixel_active=0b{state.pixel_active_mask:04b} "
         f"tca9534={'ok' if state.tca_ready else 'not ready'}",
     )
 
@@ -259,30 +252,21 @@ def main(screen) -> None:
                 time.sleep(0.03)
                 continue
 
-            rail = next((item for item in RAILS if key == ord(item[0])), None)
             relay = next(
                 (item for item in RELAYS if key in (ord(item[0]), ord(item[0].upper()))),
                 None,
             )
-            if rail is None and relay is None:
+            if relay is None:
                 time.sleep(0.03)
                 continue
 
             try:
-                if rail is not None:
-                    _, name, mask = rail
-                    next_rail_mask = state.rail_mask ^ mask
-                    bus.write_byte_data(ADDRESS, REG_RAILS, next_rail_mask)
-                    state.rail_mask = next_rail_mask
-                    label = "on" if state.rail_mask & mask else "off"
-                    message = f"write ok: toggled {name} {label}, sent rail mask 0x{state.rail_mask:02x}"
-                elif relay is not None:
-                    _, name, mask = relay
-                    next_relay_mask = state.relay_mask ^ mask
-                    bus.write_byte_data(ADDRESS, REG_RELAYS, next_relay_mask)
-                    state.relay_mask = next_relay_mask
-                    label = "on" if state.relay_mask & mask else "off"
-                    message = f"write ok: toggled {name} {label}, sent relay mask 0x{state.relay_mask:02x}"
+                _, name, mask = relay
+                next_relay_mask = state.relay_mask ^ mask
+                bus.write_byte_data(ADDRESS, REG_RELAYS, next_relay_mask)
+                state.relay_mask = next_relay_mask
+                label = "on" if state.relay_mask & mask else "off"
+                message = f"write ok: toggled {name} {label}, sent relay mask 0x{state.relay_mask:02x}"
             except OSError as exc:
                 message = (
                     f"I2C error: {exc}. Check RP2040 firmware, address 0x{ADDRESS:02x}, "

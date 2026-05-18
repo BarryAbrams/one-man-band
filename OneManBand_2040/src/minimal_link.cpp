@@ -25,22 +25,19 @@ constexpr uint8_t kTca9534ConfigRegister = 0x03;
 
 constexpr uint8_t kRegisterRailState = 0x01;
 constexpr uint8_t kRegisterRelayState = 0x02;
-constexpr uint8_t kRegisterServoEnableMask = 0x05;
-constexpr uint8_t kRegisterServo0Value = 0x10;
-constexpr uint8_t kRegisterServo7Value = 0x17;
 constexpr uint8_t kRegisterPixelCommandStart = 0x40;
 constexpr uint8_t kRegisterPixelCommandEnd = 0x4C;
 constexpr uint8_t kRegisterPixelTrigger = 0x4B;
 constexpr uint8_t kRegisterPixelAnimationId = 0x4C;
 constexpr uint8_t kRegisterStatusSnapshot = 0x60;
-constexpr uint8_t kStatusSnapshotLength = 16;
+constexpr uint8_t kStatusSnapshotLength = 8;
 constexpr uint8_t kStatusSnapshotMagic = 0xA5;
-constexpr uint8_t kStatusSnapshotVersion = 1;
+constexpr uint8_t kStatusSnapshotVersion = 2;
 constexpr uint8_t kStatusSnapshotChecksumIndex = kStatusSnapshotLength - 1;
 
 constexpr uint8_t kRailMask = 0x0F;
+constexpr uint8_t kFixedRailMask = kRailMask;
 constexpr uint8_t kRelayMask = 0x0F;
-constexpr uint8_t kServoCount = 8;
 constexpr uint8_t kPixelLineCount = 4;
 constexpr uint16_t kPixelsPerLine = 100;
 constexpr uint8_t kPixelCommandSize =
@@ -98,10 +95,8 @@ struct PixelLineState {
 };
 
 struct ControllerState {
-  uint8_t railMask = 0x0E;  // 12V_B, 12V_C, and 8V on by default.
+  uint8_t railMask = kFixedRailMask;
   uint8_t relayMask = 0x00;
-  uint8_t servoEnableMask = 0x00;
-  uint8_t servoValues[kServoCount] = {127, 127, 127, 127, 127, 127, 127, 127};
   PixelLineState pixelLines[kPixelLineCount] = {};
   uint32_t receivedCommandCount = 0;
   uint32_t droppedCommandCount = 0;
@@ -145,7 +140,6 @@ void writeRailOutput(const RailOutput& output, bool enabled) {
 void configureRailOutputs() {
   for (const RailOutput& output : kRailOutputs) {
     pinMode(output.pin, OUTPUT);
-    writeRailOutput(output, false);
   }
 }
 
@@ -153,6 +147,11 @@ void applyRailOutputs(uint8_t railMask) {
   for (const RailOutput& output : kRailOutputs) {
     writeRailOutput(output, (railMask & output.mask) != 0);
   }
+}
+
+void forceRailsEnabled() {
+  gState.railMask = kFixedRailMask;
+  applyRailOutputs(kFixedRailMask);
 }
 
 bool writePeripheralRegister(uint8_t address, uint8_t registerAddress,
@@ -406,16 +405,12 @@ void rebuildStatusSnapshot() {
   snapshot[1] = kStatusSnapshotVersion;
   snapshot[2] = gState.railMask;
   snapshot[3] = gState.relayMask;
-  snapshot[4] = gState.servoEnableMask;
-  for (uint8_t index = 0; index < kServoCount; ++index) {
-    snapshot[5 + index] = gState.servoValues[index];
-  }
   for (uint8_t line = 0; line < kPixelLineCount; ++line) {
     if (gState.pixelLines[line].active) {
-      snapshot[13] |= static_cast<uint8_t>(1u << line);
+      snapshot[4] |= static_cast<uint8_t>(1u << line);
     }
   }
-  snapshot[14] = gTca9534Ready ? 1 : 0;
+  snapshot[5] = gTca9534Ready ? 1 : 0;
   snapshot[kStatusSnapshotChecksumIndex] = snapshotChecksum(snapshot);
 
   noInterrupts();
@@ -604,11 +599,8 @@ bool applyRegisterWrite(uint8_t registerAddress, const uint8_t* values,
 
   switch (registerAddress) {
     case kRegisterRailState: {
-      const uint8_t nextRailMask = values[0] & kRailMask;
-      const bool changed = gState.railMask != nextRailMask;
-      gState.railMask = nextRailMask;
-      applyRailOutputs(gState.railMask);
-      return changed;
+      forceRailsEnabled();
+      return false;
     }
     case kRegisterRelayState: {
       const uint8_t nextRelayMask = values[0] & kRelayMask;
@@ -619,25 +611,8 @@ bool applyRegisterWrite(uint8_t registerAddress, const uint8_t* values,
       }
       return changed;
     }
-    case kRegisterServoEnableMask: {
-      const bool changed = gState.servoEnableMask != values[0];
-      gState.servoEnableMask = values[0];
-      return changed;
-    }
     default:
       break;
-  }
-
-  if (registerAddress >= kRegisterServo0Value &&
-      registerAddress <= kRegisterServo7Value) {
-    uint8_t channel = registerAddress - kRegisterServo0Value;
-    bool changed = false;
-    for (uint8_t index = 0; index < valueCount && channel < kServoCount;
-         ++index, ++channel) {
-      changed = changed || gState.servoValues[channel] != values[index];
-      gState.servoValues[channel] = values[index];
-    }
-    return changed;
   }
 
   if (registerAddress >= kRegisterPixelCommandStart &&
@@ -684,16 +659,7 @@ void printStateSummary() {
   printBinaryNibble(gState.railMask);
   Serial.print(" relays=0b");
   printBinaryNibble(gState.relayMask);
-  Serial.print(" servo_enable=0x");
-  Serial.print(gState.servoEnableMask, HEX);
-  Serial.print(" servos=[");
-  for (uint8_t index = 0; index < kServoCount; ++index) {
-    if (index != 0) {
-      Serial.print(',');
-    }
-    Serial.print(gState.servoValues[index]);
-  }
-  Serial.print("] pixels=[");
+  Serial.print(" pixels=[");
   for (uint8_t line = 0; line < kPixelLineCount; ++line) {
     if (line != 0) {
       Serial.print(',');
@@ -713,7 +679,7 @@ void setup() {
   delay(500);
 
   configureRailOutputs();
-  applyRailOutputs(gState.railMask);
+  forceRailsEnabled();
   initializePixelLines();
 
   Wire.setSDA(kPeripheralI2cSdaPin);
@@ -743,7 +709,7 @@ void setup() {
 void loop() {
   const unsigned long now = millis();
   if (now - gLastRailReassertMs >= kRailReassertMs) {
-    applyRailOutputs(gState.railMask);
+    forceRailsEnabled();
     gLastRailReassertMs = now;
   }
 
