@@ -487,13 +487,30 @@ def _broadcast_state() -> None:
 
 
 def _state_update_log_line(source: str, payload: dict[str, object]) -> str:
+    rails = int(payload.get("rails") or 0)
+    solenoids = int(payload.get("solenoids") or 0)
+    servo_enable_mask = int(payload.get("servo_enable_mask") or 0)
+    alarms = int(payload.get("alarms") or 0)
+    ina_presence = int(payload.get("ina_presence") or 0)
     return (
         f"[state:update] source={source} "
         f"connected={payload.get('connected')} "
         f"backend={payload.get('backend')} "
-        f"rails={payload.get('rails_map')} "
-        f"solenoids={payload.get('solenoids_map')} "
-        f"error={payload.get('error') or ''}"
+        f"version={payload.get('version')} "
+        f"rails=0x{rails:02x}/0b{rails:08b} {payload.get('rails_map')} "
+        f"solenoids=0x{solenoids:02x}/0b{solenoids:08b} {payload.get('solenoids_map')} "
+        f"servo_enable=0x{servo_enable_mask:02x}/0b{servo_enable_mask:08b} "
+        f"servo_values={payload.get('servo_values_map')} "
+        f"alarms=0x{alarms:02x}/0b{alarms:08b} "
+        f"ina_presence=0x{ina_presence:02x}/0b{ina_presence:08b} "
+        f"ina_voltage={payload.get('ina_voltage_map')} "
+        f"ina_current={payload.get('ina_current_map')} "
+        f"gpio={payload.get('gpio_inputs_map')} "
+        f"gpio_physical={payload.get('gpio_physical_map')} "
+        f"gpio_overrides={payload.get('gpio_override_map')} "
+        f"pixel={payload.get('pixel_command')} "
+        f"error={payload.get('error') or ''} "
+        f"gpio_error={payload.get('gpio_error') or ''}"
     )
 
 
