@@ -24,6 +24,8 @@ BH1750_POWER_ON: Final[int] = 0x01
 BH1750_RESET: Final[int] = 0x07
 BH1750_ONE_TIME_HIGH_RES_MODE: Final[int] = 0x20
 BH1750_MEASUREMENT_SECONDS: Final[float] = 0.18
+BH1750_UPDATE_SECONDS: Final[float] = 1.0
+BH1750_THRESHOLD_LUX: Final[float] = 200.0
 
 REG_VERSION: Final[int] = 0x00
 REG_RAILS: Final[int] = 0x01
@@ -175,6 +177,8 @@ class DeviceController:
             ambient_light_raw=0 if self._mock_mode else None,
         )
         self._setup_gpio()
+        self._last_bh1750_read_at = 0.0
+        self._bh1750_was_over_threshold = False
 
     def set_i2c_write_listener(
         self, listener: Callable[[DeviceState], None] | None
@@ -268,6 +272,34 @@ class DeviceController:
         elif reg == REG_SOLENOIDS:
             self._state.solenoids = value & 0x0F
 
+    def _update_ambient_light_once_per_second(self, bus: SMBus, state: DeviceState) -> None:
+        now = time.monotonic()
+
+        if now - self._last_bh1750_read_at < BH1750_UPDATE_SECONDS:
+            state.ambient_light_lux = self._state.ambient_light_lux
+            state.ambient_light_raw = self._state.ambient_light_raw
+            state.ambient_light_error = self._state.ambient_light_error
+            return
+
+        self._last_bh1750_read_at = now
+
+        (
+            state.ambient_light_lux,
+            state.ambient_light_raw,
+            state.ambient_light_error,
+        ) = self._read_ambient_light(bus)
+
+        lux = state.ambient_light_lux
+        is_over_threshold = lux is not None and lux > BH1750_THRESHOLD_LUX
+
+        if is_over_threshold and not self._bh1750_was_over_threshold:
+            print(
+                f"BH1750 threshold crossed: {lux:.1f} lux "
+                f"> {BH1750_THRESHOLD_LUX:.1f} lux"
+            )
+
+        self._bh1750_was_over_threshold = is_over_threshold
+
     def _snapshot_checksum(self, data: list[int]) -> int:
         return (-sum(data[:STATUS_SNAPSHOT_CHECKSUM_INDEX])) & 0xFF
 
@@ -339,11 +371,7 @@ class DeviceController:
                         state = self._with_fixed_rails(
                             self._read_snapshot_state(bus, gpio_inputs, gpio_error)
                         )
-                        (
-                            state.ambient_light_lux,
-                            state.ambient_light_raw,
-                            state.ambient_light_error,
-                        ) = self._read_ambient_light(bus)
+                        self._update_ambient_light_once_per_second(bus, state)
                         return state
                     except OSError as exc:
                         last_error = exc
