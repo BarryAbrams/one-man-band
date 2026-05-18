@@ -1,19 +1,15 @@
-#!/usr/bin/env python3
-from __future__ import annotations
-
-import argparse
-import signal
-import struct
-import sys
-import time
-from dataclasses import dataclass
 
 from smbus2 import SMBus
+
+addr = 0x12
+bus = SMBus(1)
 
 
 def main() -> int:
    print("python is running")
-
+   while True:
+      bus.write_byte(addr, 0x41)
+   return 0
 
 if __name__ == "__main__":
     sys.exit(main())
