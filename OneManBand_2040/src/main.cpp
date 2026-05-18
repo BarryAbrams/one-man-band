@@ -162,12 +162,12 @@ unsigned long gLastServoProofOfConceptStepMs = 0;
 uint8_t gServoProofOfConceptStep = 0;
 bool gPca9685Present = false;
 
-Adafruit_NeoPixel pixel(kStatusPixelCount, kNeoPixelPin, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel pixel(kStatusPixelCount, kNeoPixelPin, NEO_RGB + NEO_KHZ800);
 Adafruit_NeoPixel pixelRails[kPixelRailCount] = {
-    Adafruit_NeoPixel(kPixelsPerRail, kPixel1Pin, NEO_GRB + NEO_KHZ800),
-    Adafruit_NeoPixel(kPixelsPerRail, kPixel2Pin, NEO_GRB + NEO_KHZ800),
-    Adafruit_NeoPixel(kPixelsPerRail, kPixel3Pin, NEO_GRB + NEO_KHZ800),
-    Adafruit_NeoPixel(kPixelsPerRail, kPixel4Pin, NEO_GRB + NEO_KHZ800),
+    Adafruit_NeoPixel(kPixelsPerRail, kPixel1Pin, NEO_RGB + NEO_KHZ800),
+    Adafruit_NeoPixel(kPixelsPerRail, kPixel2Pin, NEO_RGB + NEO_KHZ800),
+    Adafruit_NeoPixel(kPixelsPerRail, kPixel3Pin, NEO_RGB + NEO_KHZ800),
+    Adafruit_NeoPixel(kPixelsPerRail, kPixel4Pin, NEO_RGB + NEO_KHZ800),
 };
 Adafruit_PWMServoDriver servoDriver(kPca9685Address, Wire);
 

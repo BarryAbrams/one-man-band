@@ -116,10 +116,10 @@ constexpr RailOutput kRailOutputs[] = {
 };
 
 Adafruit_NeoPixel pixelLines[kPixelLineCount] = {
-    Adafruit_NeoPixel(kPixelsPerLine, kPixel1Pin, NEO_GRB + NEO_KHZ800),
-    Adafruit_NeoPixel(kPixelsPerLine, kPixel2Pin, NEO_GRB + NEO_KHZ800),
-    Adafruit_NeoPixel(kPixelsPerLine, kPixel3Pin, NEO_GRB + NEO_KHZ800),
-    Adafruit_NeoPixel(kPixelsPerLine, kPixel4Pin, NEO_GRB + NEO_KHZ800),
+    Adafruit_NeoPixel(kPixelsPerLine, kPixel1Pin, NEO_RGB + NEO_KHZ800),
+    Adafruit_NeoPixel(kPixelsPerLine, kPixel2Pin, NEO_RGB + NEO_KHZ800),
+    Adafruit_NeoPixel(kPixelsPerLine, kPixel3Pin, NEO_RGB + NEO_KHZ800),
+    Adafruit_NeoPixel(kPixelsPerLine, kPixel4Pin, NEO_RGB + NEO_KHZ800),
 };
 
 volatile I2cCommand gCommandQueue[kCommandQueueSize];
