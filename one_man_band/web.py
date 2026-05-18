@@ -491,7 +491,6 @@ def _poll_state_forever() -> None:
         socketio.sleep(STATE_POLL_SECONDS)
         if _shutdown_event.is_set():
             break
-        print("Polling state...")
         socketio.emit("state:update", _combined_state(process_logic=True))
 
 
@@ -535,8 +534,8 @@ def create_socketio(app: Flask) -> SocketIO:
     if not _poller_started:
         logic_engine.run_boot_rules()
         node_control.start()
-        socketio.start_background_task(_poll_state_forever)
-        _poller_started = True
+        # socketio.start_background_task(_poll_state_forever)
+        # _poller_started = True
 
     return socketio
 
