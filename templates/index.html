@@ -37,51 +37,15 @@
         <section class="panel">
           <div class="section-header">
             <p class="eyebrow">Power</p>
-            <h2>Supply Control</h2>
-            <p class="section-copy">Manage the OMB power rails and keep the power side close to the system telemetry.</p>
-          </div>
-          <div class="panel-header">
-            <div></div>
-            <div class="actions">
-              <button class="secondary" @click="setAllRails(true)">All On</button>
-              <button class="secondary" @click="setAllRails(false)">All Off</button>
-              <button class="secondary" @click="refresh()">Refresh</button>
-            </div>
+            <h2>Fixed Supply State</h2>
+            <p class="section-copy">The OMB keeps 12V_B, 12V_C, and 8V enabled. 12V_A stays disabled.</p>
           </div>
           <div class="grid">
             <template x-for="name in meta.rails" :key="name">
-              <button class="tile" :class="state.rails_map[name] ? 'active' : ''" @click="toggleRail(name)">
+              <section class="tile" :class="state.rails_map[name] ? 'active' : ''">
                 <span class="tile-title" x-text="railLabels[name]?.title || name"></span>
                 <span class="tile-subtitle" x-text="railLabels[name]?.subtitle || ''"></span>
                 <span class="tile-value" x-text="state.rails_map[name] ? 'ON' : 'OFF'"></span>
-              </button>
-            </template>
-          </div>
-        </section>
-
-        <section class="panel">
-          <div class="section-header">
-            <p class="eyebrow">Power</p>
-            <h2>INA260 Telemetry</h2>
-            <p class="section-copy">Track voltage and current on the solenoid and servo lines.</p>
-          </div>
-          <div class="grid">
-            <template x-for="channel in Object.values(meta.ina_channels || {})" :key="channel.key">
-              <section class="tile telemetry-tile" :class="state.ina_present_map[channel.key] ? 'active' : ''">
-                <div>
-                  <span class="tile-title" x-text="channel.title"></span>
-                  <span class="tile-subtitle" x-text="state.ina_present_map[channel.key] ? 'Sensor present' : 'Sensor not detected'"></span>
-                </div>
-                <div class="telemetry-readings">
-                  <div class="reading-row">
-                    <span class="reading-label">Voltage</span>
-                    <strong class="reading-value" x-text="formatVoltage(state.ina_voltage_map[channel.key])"></strong>
-                  </div>
-                  <div class="reading-row">
-                    <span class="reading-label">Current</span>
-                    <strong class="reading-value" x-text="formatCurrent(state.ina_current_map[channel.key])"></strong>
-                  </div>
-                </div>
               </section>
             </template>
           </div>
@@ -915,9 +879,6 @@
                               <option value="solenoid_set">Set Relay</option>
                               <option value="solenoid_pulse">Pulse Relay</option>
                             </optgroup>
-                            <optgroup label="Power Rails">
-                              <option value="rail_set">Set Power Rail</option>
-                            </optgroup>
                             <optgroup label="Servos">
                               <option value="servo_set">Set Servo Position</option>
                             </optgroup>
@@ -1044,30 +1005,6 @@
                             </select>
                           </label>
                         </template>
-                        <label class="field-label">
-                          Delay ms
-                          <input type="number" min="0" x-model.number="action.delay_ms">
-                        </label>
-                      </div>
-                    </template>
-
-                    <template x-if="action.type === 'rail_set'">
-                      <div class="logic-row">
-                        <label class="field-label">
-                          Power Rail
-                          <select x-model="action.name">
-                            <template x-for="name in meta.rails || []" :key="name">
-                              <option :value="name" x-text="railLabels[name]?.title || name"></option>
-                            </template>
-                          </select>
-                        </label>
-                        <label class="field-label">
-                          State
-                          <select x-model="action.enabled">
-                            <option :value="true">ON</option>
-                            <option :value="false">OFF</option>
-                          </select>
-                        </label>
                         <label class="field-label">
                           Delay ms
                           <input type="number" min="0" x-model.number="action.delay_ms">
@@ -1234,9 +1171,6 @@
                               <option value="solenoid_set">Set Relay</option>
                               <option value="solenoid_pulse">Pulse Relay</option>
                             </optgroup>
-                            <optgroup label="Power Rails">
-                              <option value="rail_set">Set Power Rail</option>
-                            </optgroup>
                             <optgroup label="Servos">
                               <option value="servo_set">Set Servo Position</option>
                             </optgroup>
@@ -1363,30 +1297,6 @@
                             </select>
                           </label>
                         </template>
-                        <label class="field-label">
-                          Delay ms
-                          <input type="number" min="0" x-model.number="action.delay_ms">
-                        </label>
-                      </div>
-                    </template>
-
-                    <template x-if="action.type === 'rail_set'">
-                      <div class="logic-row">
-                        <label class="field-label">
-                          Power Rail
-                          <select x-model="action.name">
-                            <template x-for="name in meta.rails || []" :key="name">
-                              <option :value="name" x-text="railLabels[name]?.title || name"></option>
-                            </template>
-                          </select>
-                        </label>
-                        <label class="field-label">
-                          State
-                          <select x-model="action.enabled">
-                            <option :value="true">ON</option>
-                            <option :value="false">OFF</option>
-                          </select>
-                        </label>
                         <label class="field-label">
                           Delay ms
                           <input type="number" min="0" x-model.number="action.delay_ms">
@@ -1596,9 +1506,6 @@
             solenoids_map: {},
             servo_enabled_map: {},
             servo_values_map: {},
-            ina_present_map: {},
-            ina_voltage_map: {},
-            ina_current_map: {},
             gpio_inputs_map: {},
             gpio_physical_map: {},
             gpio_override_map: {},
@@ -2623,7 +2530,6 @@
           defaultAction(type = "") {
             const firstSolenoid = (this.meta.solenoids || ["P0"])[0];
             const firstServo = (this.meta.servos || [0])[0];
-            const firstPowerRail = (this.meta.rails || ["12V_B"])[0];
             if (!type) {
               return { type: "" };
             }
@@ -2650,9 +2556,6 @@
             }
             if (type === "solenoid_set") {
               return { type, name: firstSolenoid, enabled: true, delay_ms: 0 };
-            }
-            if (type === "rail_set") {
-              return { type, name: firstPowerRail, enabled: true, delay_ms: 0 };
             }
             if (type === "servo_set") {
               return { type, channel: firstServo, value: 127, enable: true };
@@ -2739,11 +2642,6 @@
               normalized.timer_name = this.sanitizeTimerName(normalized.timer_name || "Timer1");
             }
             if (normalized.type === "solenoid_pulse" || normalized.type === "solenoid_set") {
-              normalized.delay_ms = Number(normalized.delay_ms || 0);
-            }
-            if (normalized.type === "rail_set") {
-              normalized.name = normalized.name || (this.meta.rails || ["12V_B"])[0];
-              normalized.enabled = this.logicBool(normalized.enabled);
               normalized.delay_ms = Number(normalized.delay_ms || 0);
             }
             if (normalized.type === "pixels_animate") {
@@ -2873,11 +2771,6 @@
                 payload.delay_ms = Math.max(0, Number(payload.delay_ms) || 0);
               }
               if (payload.type === "solenoid_pulse") {
-                payload.delay_ms = Math.max(0, Number(payload.delay_ms) || 0);
-              }
-              if (payload.type === "rail_set") {
-                payload.name = String(payload.name || (this.meta.rails || ["12V_B"])[0]);
-                payload.enabled = this.logicBool(payload.enabled);
                 payload.delay_ms = Math.max(0, Number(payload.delay_ms) || 0);
               }
               if (payload.type === "servo_set") {
@@ -3411,18 +3304,6 @@
             this.loadState();
           },
 
-          toggleRail(name) {
-            if (this.socketConnected && this.socket) {
-              this.socket.emit("rail:toggle", { name });
-            }
-          },
-
-          setAllRails(enabled) {
-            if (this.socketConnected && this.socket) {
-              this.socket.emit("rails:set_all", { enabled });
-            }
-          },
-
           toggleSolenoid(name) {
             if (this.socketConnected && this.socket) {
               this.socket.emit("solenoid:toggle", { name });
@@ -3488,20 +3369,6 @@
             if (this.socketConnected && this.socket) {
               this.socket.emit("audio:set_volume", { volume });
             }
-          },
-
-          formatVoltage(value) {
-            if (typeof value !== "number") {
-              return "--";
-            }
-            return `${(value / 1000).toFixed(3)} V`;
-          },
-
-          formatCurrent(value) {
-            if (typeof value !== "number") {
-              return "--";
-            }
-            return `${value} mA`;
           },
 
           hexToRgb(value) {

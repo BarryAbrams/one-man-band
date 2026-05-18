@@ -971,15 +971,6 @@ button:hover {
   gap: 12px;
 }
 
-.telemetry-tile {
-  min-height: 190px;
-}
-
-.telemetry-readings {
-  display: grid;
-  gap: 14px;
-}
-
 .reading-row {
   display: flex;
   justify-content: space-between;

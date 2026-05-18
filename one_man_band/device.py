@@ -24,13 +24,8 @@ REG_VERSION: Final[int] = 0x00
 REG_RAILS: Final[int] = 0x01
 REG_SOLENOIDS: Final[int] = 0x02
 REG_ALARMS: Final[int] = 0x03
-REG_INA_PRESENCE: Final[int] = 0x04
 REG_SERVO_ENABLE_MASK: Final[int] = 0x05
 REG_SERVO_BASE: Final[int] = 0x10
-REG_INA0_VOLTAGE_L: Final[int] = 0x20
-REG_INA0_CURRENT_L: Final[int] = 0x22
-REG_INA1_VOLTAGE_L: Final[int] = 0x24
-REG_INA1_CURRENT_L: Final[int] = 0x26
 REG_PIXEL_COMMAND: Final[int] = 0x40
 REG_STATUS_SNAPSHOT: Final[int] = 0x60
 STATUS_SNAPSHOT_LENGTH: Final[int] = 24
@@ -47,6 +42,7 @@ RAILS: Final[dict[str, int]] = {
     "12V_C": 1 << 2,
     "8V": 1 << 3,
 }
+FIXED_RAIL_STATE: Final[int] = RAILS["12V_B"] | RAILS["12V_C"] | RAILS["8V"]
 
 SOLENOIDS: Final[dict[str, int]] = {
     "P0": 1 << 0,
@@ -58,26 +54,6 @@ SOLENOIDS: Final[dict[str, int]] = {
 ALARM_BITS: Final[dict[str, int]] = {
     "12V_C_ALARM": 1 << 0,
     "8V_ALARM": 1 << 1,
-}
-
-INA_BITS: Final[dict[str, int]] = {
-    "12V_C": 1 << 0,
-    "8V": 1 << 1,
-}
-
-INA_CHANNELS: Final[dict[str, dict[str, object]]] = {
-    "12V_C": {
-        "title": "Solenoid Line",
-        "presence_mask": 1 << 0,
-        "voltage_reg": REG_INA0_VOLTAGE_L,
-        "current_reg": REG_INA0_CURRENT_L,
-    },
-    "8V": {
-        "title": "Servo Line",
-        "presence_mask": 1 << 1,
-        "voltage_reg": REG_INA1_VOLTAGE_L,
-        "current_reg": REG_INA1_CURRENT_L,
-    },
 }
 
 GPIO_INPUTS: Final[dict[str, int]] = {
@@ -148,12 +124,6 @@ class DeviceState:
             "servo_values_map": {
                 str(channel): self._servo_value(channel) for channel in SERVO_CHANNELS
             },
-            "ina_present_map": {
-                name: bool(self.ina_presence & int(config["presence_mask"]))
-                for name, config in INA_CHANNELS.items()
-            },
-            "ina_voltage_map": self.ina_voltage_mv or {},
-            "ina_current_map": self.ina_current_ma or {},
             "gpio_inputs_map": {
                 name: self._gpio_value(name) for name in GPIO_INPUTS
             },
@@ -186,13 +156,14 @@ class DeviceController:
         self._servo_value_cache: dict[int, int] = {}
         self._state = DeviceState(
             version=2 if self._mock_mode else 0,
-            ina_presence=0b11 if self._mock_mode else 0,
+            rails=FIXED_RAIL_STATE if self._mock_mode else 0,
+            ina_presence=0,
             connected=self._mock_mode,
             backend="mock" if self._mock_mode else "i2c",
             status_source="mock" if self._mock_mode else "unknown",
             servo_values=[127 for _ in SERVO_CHANNELS],
-            ina_voltage_mv={"12V_C": 0, "8V": 8000},
-            ina_current_ma={"12V_C": 0, "8V": 0},
+            ina_voltage_mv={},
+            ina_current_ma={},
             gpio_inputs={name: False for name in GPIO_INPUTS},
             gpio_input_overrides={},
             pixel_command={},
@@ -265,25 +236,9 @@ class DeviceController:
     def _read_block(self, bus: SMBus, reg: int, length: int) -> list[int]:
         return [value & 0xFF for value in bus.read_i2c_block_data(DEVICE, reg, length)]
 
-    def _read_u16_le(self, bus: SMBus, reg_low: int) -> int:
-        low = self._read_reg(bus, reg_low)
-        high = self._read_reg(bus, reg_low + 1)
-        return low | (high << 8)
-
-    def _read_i16_le(self, bus: SMBus, reg_low: int) -> int:
-        value = self._read_u16_le(bus, reg_low)
-        if value & 0x8000:
-            value -= 0x10000
-        return value
-
-    def _u16_from_snapshot(self, data: list[int], offset: int) -> int:
-        return data[offset] | (data[offset + 1] << 8)
-
-    def _i16_from_snapshot(self, data: list[int], offset: int) -> int:
-        value = self._u16_from_snapshot(data, offset)
-        if value & 0x8000:
-            value -= 0x10000
-        return value
+    def _with_fixed_rails(self, state: DeviceState) -> DeviceState:
+        state.rails = FIXED_RAIL_STATE
+        return state
 
     def _snapshot_checksum(self, data: list[int]) -> int:
         return sum(data[:STATUS_SNAPSHOT_CHECKSUM_INDEX]) & 0xFF
@@ -313,17 +268,11 @@ class DeviceController:
             rails=data[2],
             solenoids=data[3],
             alarms=data[4],
-            ina_presence=data[5],
+            ina_presence=0,
             servo_enable_mask=data[6],
             servo_values=data[7:15],
-            ina_voltage_mv={
-                "12V_C": self._u16_from_snapshot(data, 15),
-                "8V": self._u16_from_snapshot(data, 19),
-            },
-            ina_current_ma={
-                "12V_C": self._i16_from_snapshot(data, 17),
-                "8V": self._i16_from_snapshot(data, 21),
-            },
+            ina_voltage_mv={},
+            ina_current_ma={},
             connected=True,
             error="",
             backend="i2c",
@@ -347,38 +296,32 @@ class DeviceController:
         try:
             with SMBus(I2C_BUS) as bus:
                 try:
-                    return self._read_snapshot_state(bus, gpio_inputs, gpio_error)
+                    return self._with_fixed_rails(
+                        self._read_snapshot_state(bus, gpio_inputs, gpio_error)
+                    )
                 except OSError:
                     pass
 
                 servo_values = [
                     self._read_reg(bus, REG_SERVO_BASE + channel) for channel in SERVO_CHANNELS
                 ]
-                ina_voltage_mv = {
-                    name: self._read_u16_le(bus, int(config["voltage_reg"]))
-                    for name, config in INA_CHANNELS.items()
-                }
-                ina_current_ma = {
-                    name: self._read_i16_le(bus, int(config["current_reg"]))
-                    for name, config in INA_CHANNELS.items()
-                }
-                return DeviceState(
+                return self._with_fixed_rails(DeviceState(
                     version=self._read_reg(bus, REG_VERSION),
-                    rails=self._read_reg(bus, REG_RAILS),
+                    rails=FIXED_RAIL_STATE,
                     solenoids=self._read_reg(bus, REG_SOLENOIDS),
                     servo_enable_mask=self._read_reg(bus, REG_SERVO_ENABLE_MASK),
                     servo_values=servo_values,
                     alarms=self._read_reg(bus, REG_ALARMS),
-                    ina_presence=self._read_reg(bus, REG_INA_PRESENCE),
-                    ina_voltage_mv=ina_voltage_mv,
-                    ina_current_ma=ina_current_ma,
+                    ina_presence=0,
+                    ina_voltage_mv={},
+                    ina_current_ma={},
                     connected=True,
                     error="",
                     backend="i2c",
                     status_source="i2c_registers",
                     gpio_inputs=gpio_inputs,
                     gpio_error=gpio_error,
-                )
+                ))
         except OSError as exc:
             return DeviceState(
                 connected=False,
@@ -396,6 +339,7 @@ class DeviceController:
                 self._state.connected = True
                 self._state.backend = "mock"
                 self._state.status_source = "mock"
+                self._state.rails = FIXED_RAIL_STATE
                 self._state.gpio_inputs, self._state.gpio_error = self._read_gpio_inputs()
                 self._state.gpio_input_overrides = overrides
                 self._state.pixel_command = pixel_command
@@ -420,7 +364,7 @@ class DeviceController:
             pixel_command = dict(self._state.pixel_command or {})
             if self._mock_mode:
                 if reg == REG_RAILS:
-                    self._state.rails = value & 0x0F
+                    self._state.rails = FIXED_RAIL_STATE
                 elif reg == REG_SOLENOIDS:
                     self._state.solenoids = value & 0x0F
                 elif reg == REG_SERVO_ENABLE_MASK:
@@ -433,6 +377,7 @@ class DeviceController:
                 self._state.connected = True
                 self._state.error = ""
                 self._state.status_source = "mock"
+                self._state.rails = FIXED_RAIL_STATE
                 self._state.gpio_inputs, self._state.gpio_error = self._read_gpio_inputs()
                 self._state.gpio_input_overrides = overrides
                 self._state.pixel_command = pixel_command
@@ -481,23 +426,16 @@ class DeviceController:
     def toggle_rail(self, name: str) -> DeviceState:
         if name not in RAILS:
             raise ValueError(f"Unknown rail: {name}")
-        mask = RAILS[name]
-        state = self.read_state()
-        return self._update_register(REG_RAILS, state.rails ^ mask)
+        return self.read_state()
 
     def set_all_rails(self, enabled: bool) -> DeviceState:
-        return self._update_register(REG_RAILS, 0x0F if enabled else 0x00)
+        return self.read_state()
 
     def set_rails_enabled(self, names: list[str], enabled: bool) -> DeviceState:
         unknown = [name for name in names if name not in RAILS]
         if unknown:
             raise ValueError(f"Unknown rail: {unknown[0]}")
-        state = self.read_state()
-        mask = 0
-        for name in names:
-            mask |= RAILS[name]
-        value = (state.rails | mask) if enabled else (state.rails & ~mask)
-        return self._update_register(REG_RAILS, value)
+        return self.read_state()
 
     def toggle_solenoid(self, name: str) -> DeviceState:
         if name not in SOLENOIDS:
@@ -717,13 +655,7 @@ class DeviceController:
             "servos": list(SERVO_CHANNELS),
             "pixel_rails": list(PIXEL_RAILS.keys()),
             "pixel_animations": PIXEL_ANIMATIONS,
-            "ina_channels": {
-                name: {
-                    "title": str(config["title"]),
-                    "key": name,
-                }
-                for name, config in INA_CHANNELS.items()
-            },
+            "ina_channels": {},
             "gpio_inputs": list(GPIO_INPUTS.keys()),
             "gpio_pins": GPIO_INPUTS,
             "mock_mode": self._mock_mode,

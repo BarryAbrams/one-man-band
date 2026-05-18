@@ -6,7 +6,7 @@ Closed-system Raspberry Pi control surface for an RP2040-driven hardware rig.
 
 - Flask app for the local web interface
 - Socket.IO event layer for live state updates and control actions
-- Alpine-powered dashboard UI for rails, relays, servos, telemetry, GPIO, and audio playback
+- Alpine-powered dashboard UI for fixed rail status, relays, servos, GPIO, and audio playback
 - I2C hardware controller with mock mode for non-Pi development
 - Local audio upload library with pygame playback support
 
@@ -73,6 +73,7 @@ test the HDMI card before starting the app.
 - Logic and state polling runs every 100 ms, but the background poll reads cached RP2040 state and fresh local GPIO only. RP2040 I2C reads happen on explicit refresh, health checks, and hardware commands.
 - Logic timer causes listen for named countdown timers that are started by timer actions. Timer names use only letters and numbers.
 - NeoPixel commands target RP2040 pixel rails `PIX_1` through `PIX_4`, each currently treated as 100 pixels.
+- Power rails are fixed by firmware: `12V_B`, `12V_C`, and `8V` stay enabled; `12V_A` stays disabled.
 - MQTT node control is enabled by default and connects to `192.168.0.153:1883`.
   Override with `OMB_MQTT_ENABLED=0`, `OMB_MQTT_BROKER_HOST`, `OMB_MQTT_BROKER_PORT`, or `OMB_MQTT_HOSTNAME`.
   The node subscribes to `parcadia/global/global_state`, `parcadia/<hostname>/global_state`, and `parcadia/global/whoisthere`, publishes status to `parcadia/to_gmmy/status`, and requests current state on `parcadia/to_gmmy/state_request`.
@@ -86,13 +87,11 @@ The Raspberry Pi is the I2C master and the RP2040 is the I2C slave at address `0
 The register map used by this app is:
 
 - `0x00`: protocol version, read only
-- `0x01`: rail state, read/write
+- `0x01`: fixed rail state, read only in app usage; firmware ignores writes and enforces `0x0E`
 - `0x02`: solenoid state, read/write
 - `0x03`: alarm state, read only
-- `0x04`: INA260 presence bits, read only
 - `0x05`: servo enable mask, read/write
 - `0x10` to `0x17`: servo values for channels `0` to `7`, read/write
-- `0x20` to `0x27`: INA260 telemetry, read only
 - `0x40` to `0x4C`: NeoPixel animation command block, write/read
 - `0x60` to `0x77`: atomic status snapshot block, read only
 
@@ -122,16 +121,13 @@ Status snapshot block:
 - Byte `2`: rail state
 - Byte `3`: solenoid state
 - Byte `4`: alarm state
-- Byte `5`: INA260 presence bits
+- Byte `5`: reserved, currently `0`
 - Byte `6`: servo enable mask
 - Bytes `7` to `14`: servo values for channels `0` to `7`
-- Bytes `15` / `16`: INA0 voltage in little-endian millivolts
-- Bytes `17` / `18`: INA0 current in little-endian signed milliamps
-- Bytes `19` / `20`: INA1 voltage in little-endian millivolts
-- Bytes `21` / `22`: INA1 current in little-endian signed milliamps
+- Bytes `15` to `22`: reserved, currently `0`
 - Byte `23`: checksum, `sum(bytes 0 through 22) & 0xFF`
 
-Boot defaults from the RP2040 are `12V_B` enabled, `8V` enabled, all solenoids off, and all servos disabled.
+Boot defaults from the RP2040 are `12V_B`, `12V_C`, and `8V` enabled; `12V_A` disabled; all solenoids off; and all servos disabled.
 
 ## Next good additions
 

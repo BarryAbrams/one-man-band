@@ -491,7 +491,6 @@ def _state_update_log_line(source: str, payload: dict[str, object]) -> str:
     solenoids = int(payload.get("solenoids") or 0)
     servo_enable_mask = int(payload.get("servo_enable_mask") or 0)
     alarms = int(payload.get("alarms") or 0)
-    ina_presence = int(payload.get("ina_presence") or 0)
     return (
         f"[state:update] source={source} "
         f"connected={payload.get('connected')} "
@@ -503,9 +502,6 @@ def _state_update_log_line(source: str, payload: dict[str, object]) -> str:
         f"servo_enable=0x{servo_enable_mask:02x}/0b{servo_enable_mask:08b} "
         f"servo_values={payload.get('servo_values_map')} "
         f"alarms=0x{alarms:02x}/0b{alarms:08b} "
-        f"ina_presence=0x{ina_presence:02x}/0b{ina_presence:08b} "
-        f"ina_voltage={payload.get('ina_voltage_map')} "
-        f"ina_current={payload.get('ina_current_map')} "
         f"gpio={payload.get('gpio_inputs_map')} "
         f"gpio_physical={payload.get('gpio_physical_map')} "
         f"gpio_overrides={payload.get('gpio_override_map')} "
@@ -621,22 +617,6 @@ def handle_connect():
 @socketio.on("state:refresh")
 def handle_refresh():
     _emit_state_update(_combined_state(refresh_hardware=True), "refresh")
-
-
-@socketio.on("rail:toggle")
-def handle_rail_toggle(payload: dict[str, str]):
-    try:
-        state = controller.toggle_rail(payload["name"])
-        _emit_state_without_i2c_write(state)
-        print(f"Toggled rail {payload['name']}")
-    except (KeyError, ValueError) as exc:
-        emit("server:error", {"message": str(exc)})
-
-
-@socketio.on("rails:set_all")
-def handle_rails_set_all(payload: dict[str, bool]):
-    state = controller.set_all_rails(bool(payload["enabled"]))
-    _emit_state_without_i2c_write(state)
 
 
 @socketio.on("solenoid:toggle")
