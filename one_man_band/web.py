@@ -26,6 +26,7 @@ animation_store = AnimationStore(base_dir / "data" / "animations.sqlite3")
 _poller_started = False
 _shutdown_event = threading.Event()
 STATE_POLL_SECONDS = 0.1
+GPIO_POLL_SECONDS = 0.05
 NODE_TITLE = os.environ.get("OMB_NODE_TITLE", "Overworld Bar")
 
 
@@ -562,6 +563,34 @@ def _poll_state_forever() -> None:
         _socketio_emit_state_update(_combined_state(process_logic=True), "poll")
 
 
+def _gpio_state_signature(payload: dict[str, object]) -> tuple[object, ...]:
+    gpio_inputs = dict(payload.get("gpio_inputs_map") or {})
+    gpio_physical = dict(payload.get("gpio_physical_map") or {})
+    gpio_overrides = dict(payload.get("gpio_override_map") or {})
+    return (
+        tuple(sorted(gpio_inputs.items())),
+        tuple(sorted(gpio_physical.items())),
+        tuple(sorted(gpio_overrides.items())),
+        payload.get("gpio_error") or "",
+    )
+
+
+def _poll_gpio_forever() -> None:
+    previous_signature: tuple[object, ...] | None = None
+    while not _shutdown_event.is_set():
+        socketio.sleep(GPIO_POLL_SECONDS)
+        if _shutdown_event.is_set():
+            break
+        payload = _combined_state(process_logic=True)
+        signature = _gpio_state_signature(payload)
+        if previous_signature is None:
+            previous_signature = signature
+            continue
+        if signature != previous_signature:
+            previous_signature = signature
+            _socketio_emit_state_update(payload, "gpio_poll")
+
+
 def shutdown() -> None:
     _shutdown_event.set()
     animation_runner.stop("")
@@ -602,8 +631,9 @@ def create_socketio(app: Flask) -> SocketIO:
     if not _poller_started:
         logic_engine.run_boot_rules()
         node_control.start()
+        socketio.start_background_task(_poll_gpio_forever)
         # socketio.start_background_task(_poll_state_forever)
-        # _poller_started = True
+        _poller_started = True
 
     return socketio
 
