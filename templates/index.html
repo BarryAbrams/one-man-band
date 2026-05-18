@@ -107,13 +107,14 @@
           <div class="section-header">
             <p class="eyebrow">Inputs</p>
             <h2>Ambient Light</h2>
-            <p class="section-copy">BH1750 reading from the Raspberry Pi I2C bus. Use Refresh to sample again.</p>
+            <p class="section-copy">BH1750 reading from the Raspberry Pi I2C bus, sampled once per second.</p>
           </div>
           <div class="grid">
-            <section class="tile" :class="state.ambient_light_error ? '' : 'active'">
+            <section class="tile" :class="state.ambient_light_state === 'high' ? 'active' : ''">
               <span class="tile-title">BH1750</span>
-              <span class="tile-subtitle">Address 0x23</span>
+              <span class="tile-subtitle" x-text="ambientLightThresholdLabel()"></span>
               <span class="tile-value" x-text="ambientLightLabel()"></span>
+              <span class="tile-subtitle" x-text="ambientLightStateLabel()"></span>
             </section>
           </div>
           <template x-if="state.ambient_light_error">
@@ -792,6 +793,7 @@
                             <option value="">Choose cause</option>
                             <option value="boot">Script boots</option>
                             <option value="gpio">GPIO changes</option>
+                            <option value="ambient_light">Ambient light</option>
                             <option value="global_state">Global MQTT state</option>
                             <option value="timer">Timer countdown</option>
                           </select>
@@ -813,6 +815,25 @@
                             <select x-model="condition.state">
                               <option :value="false">LOW</option>
                               <option :value="true">HIGH</option>
+                            </select>
+                          </label>
+                          <label class="field-label">
+                            Debounce ms
+                            <input type="number" min="0" x-model.number="condition.debounce_ms">
+                          </label>
+                          <label class="field-label">
+                            Cooldown ms
+                            <input type="number" min="0" x-model.number="condition.cooldown_ms">
+                          </label>
+                        </div>
+                      </template>
+                      <template x-if="condition.type === 'ambient_light'">
+                        <div class="logic-row">
+                          <label class="field-label">
+                            State
+                            <select x-model="condition.state">
+                              <option value="low">Unlit</option>
+                              <option value="high">Lit</option>
                             </select>
                           </label>
                           <label class="field-label">
@@ -1527,6 +1548,9 @@
             ambient_light_lux: null,
             ambient_light_raw: null,
             ambient_light_error: "",
+            ambient_light_state: "unknown",
+            ambient_light_low_threshold_lux: 200,
+            ambient_light_high_threshold_lux: 200,
             audio_status: {},
             logic_timers: [],
             logic_action_events: [],
@@ -1725,6 +1749,25 @@
               return "No reading";
             }
             return `${Number(this.state.ambient_light_lux).toFixed(1)} lx`;
+          },
+
+          ambientLightStateLabel() {
+            if (this.state.ambient_light_state === "high") {
+              return "Lit";
+            }
+            if (this.state.ambient_light_state === "low") {
+              return "Unlit";
+            }
+            return "Unknown";
+          },
+
+          ambientLightThresholdLabel() {
+            const low = Number(this.state.ambient_light_low_threshold_lux ?? this.meta.ambient_light_low_threshold_lux ?? 200);
+            const high = Number(this.state.ambient_light_high_threshold_lux ?? this.meta.ambient_light_high_threshold_lux ?? 200);
+            if (low === high) {
+              return `Threshold ${high.toFixed(1)} lx`;
+            }
+            return `Low ${low.toFixed(1)} lx / High ${high.toFixed(1)} lx`;
           },
 
           defaultAnimation() {
@@ -2545,6 +2588,9 @@
             if (type === "global_state") {
               return { type: "global_state", state: "active" };
             }
+            if (type === "ambient_light") {
+              return { type: "ambient_light", state: "high", debounce_ms: 50, cooldown_ms: 1000 };
+            }
             if (type === "timer" || this.isTimerCause(type)) {
               return { type: "timer", timer_name: "Timer1", timer_event: this.timerEventFromType(type), percent: "" };
             }
@@ -2711,6 +2757,14 @@
                 state: this.globalStateValue(cause.state || "active"),
               };
             }
+            if (cause.type === "ambient_light") {
+              return {
+                ...cause,
+                state: cause.state === "low" ? "low" : "high",
+                debounce_ms: Number(cause.debounce_ms ?? 50),
+                cooldown_ms: Number(cause.cooldown_ms ?? 1000),
+              };
+            }
             return cause;
           },
 
@@ -2845,6 +2899,9 @@
               if (payload.type === "gpio") {
                 payload.state = this.logicBool(payload.state);
               }
+              if (payload.type === "ambient_light") {
+                payload.state = payload.state === "low" ? "low" : "high";
+              }
               if (payload.type === "timer") {
                 payload.timer_name = this.sanitizeTimerName(payload.timer_name || "Timer1");
                 payload.timer_event = payload.timer_event || "ended";
@@ -2959,6 +3016,9 @@
             }
             if (condition.type === "gpio") {
               return `Input ${condition.input} ${this.logicBool(condition.state) ? "HIGH" : "LOW"}`;
+            }
+            if (condition.type === "ambient_light") {
+              return `Ambient light ${condition.state === "low" ? "unlit" : "lit"}`;
             }
             if (condition.type === "timer") {
               if (condition.timer_event === "started") {

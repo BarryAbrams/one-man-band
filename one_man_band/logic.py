@@ -279,6 +279,7 @@ class LogicEngine:
             "logic_cause_types": [
                 "boot",
                 "gpio",
+                "ambient_light",
                 "timer",
                 "global_state",
             ],
@@ -479,6 +480,15 @@ class LogicEngine:
                         self._candidate_since.pop(rule.id, None)
                     return False
                 continue
+            if condition_type == "ambient_light":
+                expected = self._ambient_light_state(condition.get("state"))
+                raw_actual = state.get("ambient_light_state")
+                actual = "unknown" if raw_actual is None else self._ambient_light_state(raw_actual)
+                if actual == "unknown" or actual != expected:
+                    with self._lock:
+                        self._candidate_since.pop(rule.id, None)
+                    return False
+                continue
             if condition_type in {"timer", "timer_started", "timer_ended", "timer_position"}:
                 if not self._timer_event_should_fire(rule, condition, now):
                     return False
@@ -497,14 +507,16 @@ class LogicEngine:
         return True
 
     def _conditions_support_else(self, conditions: list[dict[str, Any]]) -> bool:
-        return conditions and all(condition.get("type") == "gpio" for condition in conditions)
+        return conditions and all(
+            condition.get("type") in {"gpio", "ambient_light"} for condition in conditions
+        )
 
     def _debounce_seconds(self, conditions: list[dict[str, Any]]) -> float:
         return max(
             [
                 max(0, int(condition.get("debounce_ms", 50))) / 1000
                 for condition in conditions
-                if condition.get("type") == "gpio"
+                if condition.get("type") in {"gpio", "ambient_light"}
             ]
             or [0]
         )
@@ -514,10 +526,22 @@ class LogicEngine:
             [
                 max(0, int(condition.get("cooldown_ms", 1000))) / 1000
                 for condition in conditions
-                if condition.get("type") == "gpio"
+                if condition.get("type") in {"gpio", "ambient_light"}
             ]
             or [0]
         )
+
+    def _ambient_light_state(self, value: Any) -> str:
+        if value is None:
+            return "low"
+        state = str(value or "unknown").strip().lower()
+        if state in {"high", "lit", "on", "true", "1"}:
+            return "high"
+        if state in {"low", "unlit", "off", "false", "0"}:
+            return "low"
+        if state == "":
+            return "low"
+        return "unknown"
 
     def _timer_event_should_fire(self, rule: LogicRule, condition: dict[str, Any], now: float) -> bool:
         timer_name = self._timer_name(condition.get("timer_name") or "")

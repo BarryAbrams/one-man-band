@@ -25,7 +25,7 @@ BH1750_RESET: Final[int] = 0x07
 BH1750_ONE_TIME_HIGH_RES_MODE: Final[int] = 0x20
 BH1750_MEASUREMENT_SECONDS: Final[float] = 0.18
 BH1750_UPDATE_SECONDS: Final[float] = 1.0
-BH1750_THRESHOLD_LUX: Final[float] = 200.0
+BH1750_DEFAULT_THRESHOLD_LUX: Final[float] = 200.0
 
 REG_VERSION: Final[int] = 0x00
 REG_RAILS: Final[int] = 0x01
@@ -116,6 +116,9 @@ class DeviceState:
     ambient_light_lux: float | None = None
     ambient_light_raw: int | None = None
     ambient_light_error: str = ""
+    ambient_light_state: str = "unknown"
+    ambient_light_low_threshold_lux: float = BH1750_DEFAULT_THRESHOLD_LUX
+    ambient_light_high_threshold_lux: float = BH1750_DEFAULT_THRESHOLD_LUX
 
     def to_payload(self) -> dict[str, object]:
         return {
@@ -160,6 +163,25 @@ class DeviceController:
         self._gpio_mode = os.environ.get("OMB_GPIO_PULL", "up").strip().lower()
         self._gpio_ready = False
         self._gpio_error = ""
+        self._bh1750_address = self._int_env("OMB_BH1750_ADDRESS", BH1750_ADDRESS)
+        single_threshold = self._float_env(
+            "OMB_BH1750_THRESHOLD_LUX",
+            BH1750_DEFAULT_THRESHOLD_LUX,
+        )
+        self._bh1750_low_threshold_lux = self._float_env(
+            "OMB_BH1750_LOW_THRESHOLD_LUX",
+            single_threshold,
+        )
+        self._bh1750_high_threshold_lux = self._float_env(
+            "OMB_BH1750_HIGH_THRESHOLD_LUX",
+            single_threshold,
+        )
+        if self._bh1750_low_threshold_lux > self._bh1750_high_threshold_lux:
+            self._bh1750_low_threshold_lux = self._bh1750_high_threshold_lux
+        self._bh1750_update_seconds = self._float_env(
+            "OMB_BH1750_UPDATE_SECONDS",
+            BH1750_UPDATE_SECONDS,
+        )
         self._state = DeviceState(
             version=2 if self._mock_mode else 0,
             rails=FIXED_RAIL_STATE if self._mock_mode else 0,
@@ -175,10 +197,12 @@ class DeviceController:
             pixel_command={},
             ambient_light_lux=0.0 if self._mock_mode else None,
             ambient_light_raw=0 if self._mock_mode else None,
+            ambient_light_state="low" if self._mock_mode else "unknown",
+            ambient_light_low_threshold_lux=self._bh1750_low_threshold_lux,
+            ambient_light_high_threshold_lux=self._bh1750_high_threshold_lux,
         )
         self._setup_gpio()
         self._last_bh1750_read_at = 0.0
-        self._bh1750_was_over_threshold = False
 
     def set_i2c_write_listener(
         self, listener: Callable[[DeviceState], None] | None
@@ -233,6 +257,18 @@ class DeviceController:
             self._gpio_error = str(exc)
             return ({name: False for name in GPIO_INPUTS}, self._gpio_error)
 
+    def _int_env(self, name: str, default: int) -> int:
+        try:
+            return int(os.environ.get(name, str(default)), 0)
+        except ValueError:
+            return default
+
+    def _float_env(self, name: str, default: float) -> float:
+        try:
+            return float(os.environ.get(name, str(default)))
+        except ValueError:
+            return default
+
     def _read_reg(self, bus: SMBus, reg: int) -> int:
         bus.write_byte(DEVICE, reg)
         return bus.read_byte(DEVICE)
@@ -248,12 +284,12 @@ class DeviceController:
 
     def _read_ambient_light(self, bus: SMBus) -> tuple[float | None, int | None, str]:
         try:
-            bus.write_byte(BH1750_ADDRESS, BH1750_POWER_ON)
-            bus.write_byte(BH1750_ADDRESS, BH1750_RESET)
-            bus.write_byte(BH1750_ADDRESS, BH1750_ONE_TIME_HIGH_RES_MODE)
+            bus.write_byte(self._bh1750_address, BH1750_POWER_ON)
+            bus.write_byte(self._bh1750_address, BH1750_RESET)
+            bus.write_byte(self._bh1750_address, BH1750_ONE_TIME_HIGH_RES_MODE)
             time.sleep(BH1750_MEASUREMENT_SECONDS)
             data = bus.read_i2c_block_data(
-                BH1750_ADDRESS,
+                self._bh1750_address,
                 BH1750_ONE_TIME_HIGH_RES_MODE,
                 2,
             )
@@ -272,36 +308,82 @@ class DeviceController:
         elif reg == REG_SOLENOIDS:
             self._state.solenoids = value & 0x0F
 
+    def _ambient_light_state_for_lux(self, lux: float | None) -> str:
+        if lux is None:
+            return "unknown"
+        previous = self._state.ambient_light_state
+        if previous == "high":
+            return "low" if lux <= self._bh1750_low_threshold_lux else "high"
+        return "high" if lux >= self._bh1750_high_threshold_lux else "low"
+
+    def _apply_ambient_light_reading(
+        self,
+        state: DeviceState,
+        lux: float | None,
+        raw: int | None,
+        error: str,
+    ) -> None:
+        previous_state = self._state.ambient_light_state
+        state.ambient_light_lux = lux
+        state.ambient_light_raw = raw
+        state.ambient_light_error = error
+        state.ambient_light_state = self._ambient_light_state_for_lux(lux)
+        state.ambient_light_low_threshold_lux = self._bh1750_low_threshold_lux
+        state.ambient_light_high_threshold_lux = self._bh1750_high_threshold_lux
+
+        print(
+            f"Ambient light: state={state.ambient_light_state} lux={lux} "
+            f"raw={raw} low={self._bh1750_low_threshold_lux:.1f} "
+            f"high={self._bh1750_high_threshold_lux:.1f} error={error}",
+            flush=True,
+        )
+        if state.ambient_light_state != previous_state:
+            print(
+                f"BH1750 state changed: {previous_state} -> {state.ambient_light_state}",
+                flush=True,
+            )
+
+    def _copy_cached_ambient_light(self, state: DeviceState) -> None:
+        state.ambient_light_lux = self._state.ambient_light_lux
+        state.ambient_light_raw = self._state.ambient_light_raw
+        state.ambient_light_error = self._state.ambient_light_error
+        state.ambient_light_state = self._state.ambient_light_state
+        state.ambient_light_low_threshold_lux = self._bh1750_low_threshold_lux
+        state.ambient_light_high_threshold_lux = self._bh1750_high_threshold_lux
+
+    def _with_ambient_light_config(self, state: DeviceState) -> DeviceState:
+        state.ambient_light_low_threshold_lux = self._bh1750_low_threshold_lux
+        state.ambient_light_high_threshold_lux = self._bh1750_high_threshold_lux
+        return state
+
     def _update_ambient_light_once_per_second(self, bus: SMBus, state: DeviceState) -> None:
         now = time.monotonic()
 
-
-        if now - self._last_bh1750_read_at < BH1750_UPDATE_SECONDS:
-            state.ambient_light_lux = self._state.ambient_light_lux
-            state.ambient_light_raw = self._state.ambient_light_raw
-            state.ambient_light_error = self._state.ambient_light_error
+        if now - self._last_bh1750_read_at < self._bh1750_update_seconds:
+            self._copy_cached_ambient_light(state)
             return
 
         self._last_bh1750_read_at = now
+        self._apply_ambient_light_reading(state, *self._read_ambient_light(bus))
 
-        (
-            state.ambient_light_lux,
-            state.ambient_light_raw,
-            state.ambient_light_error,
-        ) = self._read_ambient_light(bus)
-
-        lux = state.ambient_light_lux
-        is_over_threshold = lux is not None and lux > BH1750_THRESHOLD_LUX
-
-        print(f"Ambient light: {lux} lux, raw value {state.ambient_light_raw}, error: {state.ambient_light_error}")
-
-        if is_over_threshold and not self._bh1750_was_over_threshold:
-            print(
-                f"BH1750 threshold crossed: {lux:.1f} lux "
-                f"> {BH1750_THRESHOLD_LUX:.1f} lux"
-            )
-
-        self._bh1750_was_over_threshold = is_over_threshold
+    def refresh_ambient_light(self) -> DeviceState:
+        with self._lock:
+            if self._mock_mode:
+                return DeviceState(**asdict(self._state))
+            if SMBus is None:
+                self._state.ambient_light_error = "smbus2 is not installed"
+                self._state.ambient_light_state = "unknown"
+                return DeviceState(**asdict(self._state))
+            try:
+                with SMBus(I2C_BUS) as bus:
+                    self._last_bh1750_read_at = time.monotonic()
+                    self._apply_ambient_light_reading(
+                        self._state,
+                        *self._read_ambient_light(bus),
+                    )
+            except OSError as exc:
+                self._apply_ambient_light_reading(self._state, None, None, str(exc))
+            return DeviceState(**asdict(self._state))
 
     def _snapshot_checksum(self, data: list[int]) -> int:
         return (-sum(data[:STATUS_SNAPSHOT_CHECKSUM_INDEX])) & 0xFF
@@ -409,6 +491,7 @@ class DeviceController:
                 return DeviceState(**asdict(self._state))
 
             self._state = self._read_from_bus()
+            self._with_ambient_light_config(self._state)
             self._state.gpio_input_overrides = overrides
             self._state.pixel_command = {
                 **pixel_command,
@@ -420,6 +503,7 @@ class DeviceController:
         with self._lock:
             if refresh_gpio:
                 self._state.gpio_inputs, self._state.gpio_error = self._read_gpio_inputs()
+            self._with_ambient_light_config(self._state)
             return DeviceState(**asdict(self._state))
 
     def _update_register(self, reg: int, value: int) -> DeviceState:
@@ -703,4 +787,8 @@ class DeviceController:
             "gpio_pins": GPIO_INPUTS,
             "mock_mode": self._mock_mode,
             "gpio_pull": self._gpio_mode,
+            "ambient_light_address": self._bh1750_address,
+            "ambient_light_update_seconds": self._bh1750_update_seconds,
+            "ambient_light_low_threshold_lux": self._bh1750_low_threshold_lux,
+            "ambient_light_high_threshold_lux": self._bh1750_high_threshold_lux,
         }

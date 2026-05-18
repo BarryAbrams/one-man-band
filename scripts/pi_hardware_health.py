@@ -8,11 +8,16 @@ import platform
 import pwd
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
 I2C_BUS = 1
 RP2040_ADDRESS = 0x12
+BH1750_ADDRESSES = (0x23, 0x5C)
+BH1750_POWER_ON = 0x01
+BH1750_RESET = 0x07
+BH1750_ONE_TIME_HIGH_RES_MODE = 0x20
 GPIO_PINS = {
     "1": 13,
     "2": 6,
@@ -119,6 +124,47 @@ def check_i2c() -> None:
         status_line(None, "i2cdetect", output)
 
 
+def check_bh1750() -> None:
+    try:
+        from smbus2 import SMBus
+    except ImportError:
+        return
+
+    selected_address = os.environ.get("OMB_BH1750_ADDRESS")
+    try:
+        addresses = (int(selected_address, 0),) if selected_address else BH1750_ADDRESSES
+    except ValueError:
+        status_line(False, "env OMB_BH1750_ADDRESS", selected_address)
+        return
+    found = False
+
+    try:
+        with SMBus(I2C_BUS) as bus:
+            for address in addresses:
+                try:
+                    bus.write_byte(address, BH1750_POWER_ON)
+                    bus.write_byte(address, BH1750_RESET)
+                    bus.write_byte(address, BH1750_ONE_TIME_HIGH_RES_MODE)
+                    time.sleep(0.18)
+                    msb, lsb = bus.read_i2c_block_data(
+                        address,
+                        BH1750_ONE_TIME_HIGH_RES_MODE,
+                        2,
+                    )
+                except OSError as exc:
+                    status_line(False, f"BH1750 0x{address:02x}", str(exc))
+                    continue
+                raw = (msb << 8) | lsb
+                status_line(True, f"BH1750 0x{address:02x}", f"raw={raw} lux={raw / 1.2:.2f}")
+                found = True
+    except OSError as exc:
+        status_line(False, "BH1750 I2C", str(exc))
+        return
+
+    if not found:
+        status_line(False, "BH1750", "no sensor responded")
+
+
 def check_gpio() -> None:
     check_python_package("RPi.GPIO", "rpi-lgpio")
 
@@ -178,7 +224,15 @@ def check_system() -> None:
     status_line(None, "python", sys.executable)
     status_line(None, "platform", platform.platform())
     status_line(None, "user", f"{pwd.getpwuid(os.getuid()).pw_name} groups={','.join(sorted(current_groups()))}")
-    for name in ("OMB_MOCK_HARDWARE", "OMB_GPIO_PULL", "SDL_AUDIODRIVER", "AUDIODEV"):
+    for name in (
+        "OMB_MOCK_HARDWARE",
+        "OMB_GPIO_PULL",
+        "OMB_BH1750_ADDRESS",
+        "OMB_BH1750_LOW_THRESHOLD_LUX",
+        "OMB_BH1750_HIGH_THRESHOLD_LUX",
+        "SDL_AUDIODRIVER",
+        "AUDIODEV",
+    ):
         value = os.environ.get(name)
         status_line(None, f"env {name}", value if value is not None else "unset")
 
@@ -191,6 +245,8 @@ def main() -> int:
     check_system()
     print("\nI2C")
     check_i2c()
+    print("\nBH1750")
+    check_bh1750()
     print("\nGPIO")
     check_gpio()
     print("\nAudio")

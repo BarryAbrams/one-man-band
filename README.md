@@ -70,6 +70,7 @@ test the HDMI card before starting the app.
 - The GPIO monitor imports `RPi.GPIO`, and on current Raspberry Pi OS this is best provided by the `rpi-lgpio` compatibility package from `requirements.txt`.
 - If the GPIO panel says `No compatible GPIO library is installed in this Python environment`, activate the venv and run `pip install -r requirements.txt`.
 - GPIO inputs default to internal pull-ups (`OMB_GPIO_PULL=up`), which is usually what you want for a switch wired between the input and ground. Set `OMB_GPIO_PULL=down` for switches wired to 3.3V, or `OMB_GPIO_PULL=off` if you provide external bias resistors.
+- A BH1750 light sensor on I2C bus `1` is polled once per second for external LED lit/unlit detection. The default address is `0x23`; override with `OMB_BH1750_ADDRESS=0x5c` if the ADDR pin is high. Set `OMB_BH1750_HIGH_THRESHOLD_LUX` and `OMB_BH1750_LOW_THRESHOLD_LUX` to add hysteresis, or set `OMB_BH1750_THRESHOLD_LUX` to use one shared threshold.
 - Logic and state polling runs every 100 ms, but the background poll reads cached RP2040 state and fresh local GPIO only. RP2040 I2C reads happen on explicit refresh, health checks, and hardware commands.
 - Logic timer causes listen for named countdown timers that are started by timer actions. Timer names use only letters and numbers.
 - NeoPixel commands target RP2040 pixel rails `PIX_1` through `PIX_4`, each currently treated as 100 pixels.

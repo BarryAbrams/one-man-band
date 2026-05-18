@@ -27,6 +27,7 @@ _poller_started = False
 _shutdown_event = threading.Event()
 STATE_POLL_SECONDS = 0.1
 GPIO_POLL_SECONDS = 0.05
+AMBIENT_LIGHT_POLL_SECONDS = 1.0
 NODE_TITLE = os.environ.get("OMB_NODE_TITLE", "Overworld Bar")
 
 
@@ -508,6 +509,7 @@ def _state_update_log_line(source: str, payload: dict[str, object]) -> str:
         f"gpio_overrides={payload.get('gpio_override_map')} "
         f"ambient_lux={payload.get('ambient_light_lux')} "
         f"ambient_raw={payload.get('ambient_light_raw')} "
+        f"ambient_state={payload.get('ambient_light_state')} "
         f"ambient_error={payload.get('ambient_light_error') or ''} "
         f"pixel={payload.get('pixel_command')} "
         f"error={payload.get('error') or ''} "
@@ -578,6 +580,15 @@ def _gpio_state_signature(payload: dict[str, object]) -> tuple[object, ...]:
     )
 
 
+def _ambient_light_signature(payload: dict[str, object]) -> tuple[object, ...]:
+    return (
+        payload.get("ambient_light_state") or "unknown",
+        payload.get("ambient_light_lux"),
+        payload.get("ambient_light_raw"),
+        payload.get("ambient_light_error") or "",
+    )
+
+
 def _poll_gpio_forever() -> None:
     previous_signature: tuple[object, ...] | None = None
     while not _shutdown_event.is_set():
@@ -592,6 +603,29 @@ def _poll_gpio_forever() -> None:
         if signature != previous_signature:
             previous_signature = signature
             _socketio_emit_state_update(payload, "gpio_poll")
+
+
+def _poll_ambient_light_forever() -> None:
+    previous_signature: tuple[object, ...] | None = None
+    while not _shutdown_event.is_set():
+        socketio.sleep(AMBIENT_LIGHT_POLL_SECONDS)
+        if _shutdown_event.is_set():
+            break
+        state = controller.refresh_ambient_light()
+        payload = {
+            **state.to_payload(),
+            "audio_status": audio_manager.status().to_payload(),
+            "logic_timers": logic_engine.timers_payload(),
+            "logic_action_events": logic_engine.action_events_payload(),
+            "node_control": node_control.payload(),
+        }
+        logic_engine.process_state(payload)
+        payload["logic_timers"] = logic_engine.timers_payload()
+        payload["logic_action_events"] = logic_engine.action_events_payload()
+        signature = _ambient_light_signature(payload)
+        if signature != previous_signature:
+            previous_signature = signature
+            _socketio_emit_state_update(payload, "ambient_light_poll")
 
 
 def shutdown() -> None:
@@ -635,6 +669,7 @@ def create_socketio(app: Flask) -> SocketIO:
         logic_engine.run_boot_rules()
         node_control.start()
         socketio.start_background_task(_poll_gpio_forever)
+        socketio.start_background_task(_poll_ambient_light_forever)
         # socketio.start_background_task(_poll_state_forever)
         _poller_started = True
 
