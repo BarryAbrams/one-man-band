@@ -47,7 +47,7 @@ constexpr uint8_t kPixelAnimationCandleFlicker = 1;
 constexpr unsigned long kCandleFlickerFrameMs = 45;
 constexpr unsigned long kRailReassertMs = 250;
 
-constexpr uint8_t kCommandQueueSize = 8;
+constexpr uint8_t kCommandQueueSize = 32;
 constexpr uint8_t kMaxCommandBytes = 16;
 
 struct RailOutput {
@@ -129,6 +129,8 @@ volatile uint32_t gQueuedCommandCount = 0;
 volatile uint32_t gDroppedCommandCount = 0;
 volatile uint8_t gLastRegisterPointer = kRegisterStatusSnapshot;
 volatile uint8_t gStatusSnapshot[kStatusSnapshotLength] = {};
+volatile bool gPendingRelayCommand = false;
+volatile uint8_t gPendingRelayMask = 0;
 
 void printBinaryNibble(uint8_t value);
 
@@ -431,29 +433,42 @@ void receiveEvent(int byteCount) {
     return;
   }
 
+  uint8_t bytes[kMaxCommandBytes] = {};
+  uint8_t size = 0;
+  while (Wire1.available() && size < kMaxCommandBytes) {
+    bytes[size] = static_cast<uint8_t>(Wire1.read());
+    ++size;
+  }
+  while (Wire1.available()) {
+    Wire1.read();
+    ++gDroppedCommandCount;
+  }
+
+  if (size == 0) {
+    return;
+  }
+
   if (byteCount == 1) {
-    gLastRegisterPointer = static_cast<uint8_t>(Wire1.read());
+    gLastRegisterPointer = bytes[0];
+    return;
+  }
+
+  if (size >= 2 && bytes[0] == kRegisterRelayState) {
+    gPendingRelayMask = bytes[1] & kRelayMask;
+    gPendingRelayCommand = true;
+    ++gQueuedCommandCount;
     return;
   }
 
   if (queueIsFull()) {
-    while (Wire1.available()) {
-      Wire1.read();
-    }
     ++gDroppedCommandCount;
     return;
   }
 
   volatile I2cCommand& command = gCommandQueue[gCommandHead];
-  command.size = 0;
-
-  while (Wire1.available() && command.size < kMaxCommandBytes) {
-    command.bytes[command.size] = static_cast<uint8_t>(Wire1.read());
-    ++command.size;
-  }
-  while (Wire1.available()) {
-    Wire1.read();
-    ++gDroppedCommandCount;
+  command.size = size;
+  for (uint8_t index = 0; index < size; ++index) {
+    command.bytes[index] = bytes[index];
   }
 
   gCommandHead = static_cast<uint8_t>((gCommandHead + 1) % kCommandQueueSize);
@@ -640,6 +655,26 @@ bool processCommand(const I2cCommand& command) {
                             command.size - 1);
 }
 
+bool applyPendingRelayCommand() {
+  noInterrupts();
+  const bool pending = gPendingRelayCommand;
+  const uint8_t relayMask = gPendingRelayMask;
+  gPendingRelayCommand = false;
+  interrupts();
+
+  if (!pending) {
+    return false;
+  }
+
+  ++gState.receivedCommandCount;
+  const bool changed = gState.relayMask != relayMask;
+  gState.relayMask = relayMask;
+  if (!applyRelayOutputs(gState.relayMask)) {
+    Serial.println("TCA9534 write FAILED while applying relay state");
+  }
+  return changed;
+}
+
 void printBinaryNibble(uint8_t value) {
   for (int8_t bit = 3; bit >= 0; --bit) {
     Serial.print((value & (1u << bit)) ? '1' : '0');
@@ -713,12 +748,14 @@ void loop() {
     gLastRailReassertMs = now;
   }
 
-  bool changed = updatePixelAnimations();
+  bool changed = applyPendingRelayCommand();
 
   I2cCommand command;
   while (popCommand(command)) {
     changed = processCommand(command) || changed;
   }
+
+  changed = updatePixelAnimations() || changed;
 
   if (changed) {
     rebuildStatusSnapshot();

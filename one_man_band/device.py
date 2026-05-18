@@ -365,6 +365,7 @@ class DeviceController:
             pixel_command = dict(self._state.pixel_command or {})
             if self._mock_mode:
                 self._apply_cached_register(reg, value)
+                self._state.rails = FIXED_RAIL_STATE
                 self._state.connected = True
                 self._state.error = ""
                 self._state.status_source = "mock"
