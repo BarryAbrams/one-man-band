@@ -109,7 +109,7 @@ struct ControllerState {
 ControllerState gState;
 uint8_t gPixelCommand[kPixelCommandSize] = {};
 bool gTca9534Ready = false;
-PixelAnimation gPixelAnimation = {};
+PixelAnimation gPixelAnimations[kPixelLineCount] = {};
 
 constexpr RailOutput kRailOutputs[] = {
     {static_cast<uint8_t>(1u << 0), k12vAEnablePin, HIGH},
@@ -363,17 +363,31 @@ void initializePixelLines() {
   }
 }
 
-void updatePixelAnimation() {
-  if (!gPixelAnimation.active) {
-    return;
-  }
-
+bool updatePixelAnimations() {
+  bool changed = false;
   const unsigned long now = millis();
-  if (now < gPixelAnimation.nextFrameMs) {
-    return;
+  for (uint8_t lineIndex = 0; lineIndex < kPixelLineCount; ++lineIndex) {
+    PixelAnimation& animation = gPixelAnimations[lineIndex];
+    if (!animation.active || now < animation.nextFrameMs) {
+      continue;
+    }
+
+    animation.nextFrameMs = now + kCandleFlickerFrameMs;
+    applyCandleFrame(animation, now);
+
+    const bool rampComplete =
+        animation.rampDurationMs == 0 ||
+        now - animation.rampStartMs >= animation.rampDurationMs;
+    if (rampComplete && animation.targetIntensity == 0) {
+      const Rgb black = {};
+      applyStaticPixels(static_cast<uint8_t>(1u << lineIndex),
+                        animation.startIndex, animation.count, black);
+      animation.active = false;
+      gState.pixelLines[lineIndex].active = false;
+      changed = true;
+    }
   }
-  gPixelAnimation.nextFrameMs = now + kCandleFlickerFrameMs;
-  applyCandleFrame(gPixelAnimation, now);
+  return changed;
 }
 
 uint8_t snapshotChecksum(const uint8_t* snapshot) {
@@ -509,27 +523,37 @@ bool applyPixelCommandIfTriggered() {
   const unsigned long now = millis();
 
   if (animationId == kPixelAnimationCandleFlicker) {
-    const bool updatingCandle = gPixelAnimation.active;
-    gPixelAnimation = {
-        .active = true,
-        .lineMask = targetMask,
-        .startIndex = startIndex,
-        .count = count,
-        .baseRgb = baseRgb,
-        .hueVariation = paramRgb.r,
-        .seed = paramRgb.g,
-        .startIntensity = static_cast<uint8_t>(
-            updatingCandle ? currentCandleIntensity(gPixelAnimation, now) : 0),
-        .targetIntensity = paramRgb.b,
-        .rampStartMs = now,
-        .rampDurationMs = durationMs,
-        .nextFrameMs = now,
-        .frameCounter = static_cast<uint16_t>(
-            updatingCandle ? gPixelAnimation.frameCounter : 0),
-    };
-    applyCandleFrame(gPixelAnimation, now);
+    for (uint8_t line = 0; line < kPixelLineCount; ++line) {
+      if ((targetMask & static_cast<uint8_t>(1u << line)) == 0) {
+        continue;
+      }
+      PixelAnimation& animation = gPixelAnimations[line];
+      const bool updatingCandle = animation.active;
+      animation = {
+          .active = true,
+          .lineMask = static_cast<uint8_t>(1u << line),
+          .startIndex = startIndex,
+          .count = count,
+          .baseRgb = baseRgb,
+          .hueVariation = paramRgb.r,
+          .seed = static_cast<uint8_t>(paramRgb.g + line),
+          .startIntensity = static_cast<uint8_t>(
+              updatingCandle ? currentCandleIntensity(animation, now) : 0),
+          .targetIntensity = paramRgb.b,
+          .rampStartMs = now,
+          .rampDurationMs = durationMs,
+          .nextFrameMs = now,
+          .frameCounter =
+              static_cast<uint16_t>(updatingCandle ? animation.frameCounter : 0),
+      };
+      applyCandleFrame(animation, now);
+    }
   } else if (animationId == kPixelAnimationStatic) {
-    gPixelAnimation.active = false;
+    for (uint8_t line = 0; line < kPixelLineCount; ++line) {
+      if ((targetMask & static_cast<uint8_t>(1u << line)) != 0) {
+        gPixelAnimations[line].active = false;
+      }
+    }
     applyStaticPixels(targetMask, startIndex, count, baseRgb);
   } else {
     Serial.print("Unsupported pixel animation id=");
@@ -544,7 +568,9 @@ bool applyPixelCommandIfTriggered() {
     }
 
     PixelLineState& pixelLine = gState.pixelLines[line];
-    pixelLine.active = true;
+    pixelLine.active =
+        animationId == kPixelAnimationCandleFlicker ? paramRgb.b > 0
+                                                    : maxRgbChannel(baseRgb) > 0;
     pixelLine.animationId = animationId;
     pixelLine.start = static_cast<uint8_t>(startIndex);
     pixelLine.count = static_cast<uint8_t>(count);
@@ -713,10 +739,9 @@ void setup() {
 }
 
 void loop() {
-  updatePixelAnimation();
+  bool changed = updatePixelAnimations();
 
   I2cCommand command;
-  bool changed = false;
   while (popCommand(command)) {
     changed = processCommand(command) || changed;
   }

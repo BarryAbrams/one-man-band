@@ -34,6 +34,13 @@ RELAYS = (
     ("r", "P3", 1 << 3),
 )
 
+PIXEL_LINES = (
+    ("a", "PIX_1", 1 << 0),
+    ("s", "PIX_2", 1 << 1),
+    ("d", "PIX_3", 1 << 2),
+    ("f", "PIX_4", 1 << 3),
+)
+
 
 @dataclass
 class ControlState:
@@ -101,10 +108,11 @@ def write_pixel_command(
     bus.write_i2c_block_data(ADDRESS, REG_PIXEL_COMMAND, command)
 
 
-def draw(screen, state: ControlState, message: str) -> None:
+def draw(screen, state: ControlState, candle_mask: int, message: str) -> None:
     screen.erase()
     screen.addstr(0, 0, "Minimal Pi -> RP2040 control")
-    screen.addstr(2, 0, "Rails: 1-4. Relays: Q/W/E/R. C candle. X clear. S pull. P push. Esc quit.")
+    screen.addstr(2, 0, "Rails: 1-4. Relays: Q/W/E/R. Candles: A/S/D/F. X fade selected off.")
+    screen.addstr(3, 0, "Shift-S pulls Arduino state. P pushes. Esc quits.")
     screen.addstr(4, 0, f"target address: 0x{ADDRESS:02x} on /dev/i2c-{I2C_BUS}")
     screen.addstr(5, 0, f"rail mask: 0x{state.rail_mask:02x} / 0b{state.rail_mask:04b}")
 
@@ -120,6 +128,15 @@ def draw(screen, state: ControlState, message: str) -> None:
     for key, name, mask in RELAYS:
         label = "ON " if state.relay_mask & mask else "OFF"
         screen.addstr(row, 0, f"{key.upper()}: {name:<2} {label}")
+        row += 1
+
+    row += 1
+    screen.addstr(row, 0, f"candle selection: 0x{candle_mask:02x} / 0b{candle_mask:04b}")
+    row += 2
+    for key, name, mask in PIXEL_LINES:
+        label = "ON " if candle_mask & mask else "OFF"
+        active = "active" if state.pixel_active_mask & mask else "idle"
+        screen.addstr(row, 0, f"{key.upper()}: {name:<5} {label} ({active})")
         row += 1
 
     row += 1
@@ -142,25 +159,28 @@ def main(screen) -> None:
     screen.keypad(True)
 
     state = ControlState()
+    candle_mask = 0x00
     message = "Ready."
 
     with SMBus(I2C_BUS) as bus:
         try:
             state = read_state(bus)
+            candle_mask = state.pixel_active_mask
             message = "Pulled initial state from Arduino."
         except OSError as exc:
             message = f"Initial Arduino status read failed: {exc}"
 
         while True:
-            draw(screen, state, message)
+            draw(screen, state, candle_mask, message)
             key = screen.getch()
 
             if key == 27:
                 break
 
-            if key in (ord("s"), ord("S")):
+            if key == ord("S"):
                 try:
                     state = read_state(bus)
+                    candle_mask = state.pixel_active_mask
                     message = "Pulled state from Arduino."
                 except OSError as exc:
                     message = f"Arduino status read failed: {exc}"
@@ -176,39 +196,53 @@ def main(screen) -> None:
                 time.sleep(0.03)
                 continue
 
-            if key in (ord("c"), ord("C")):
+            pixel_line = next(
+                (item for item in PIXEL_LINES if key in (ord(item[0]), ord(item[0].upper()))),
+                None,
+            )
+            if pixel_line is not None:
+                _, name, mask = pixel_line
+                turning_on = (candle_mask & mask) == 0
                 try:
                     write_pixel_command(
                         bus,
-                        line_mask=0x0F,
+                        line_mask=mask,
                         animation_id=PIXEL_ANIMATION_CANDLE,
                         base_rgb=(255, 96, 18),
-                        param_rgb=(32, 17, 230),
+                        param_rgb=(32, 17, 230 if turning_on else 0),
                         duration_ms=1000,
                     )
+                    candle_mask = (candle_mask | mask) if turning_on else (candle_mask & ~mask)
                     time.sleep(0.02)
                     state = read_state(bus)
-                    message = "Started candle flicker on all pixel lines."
+                    label = "on" if turning_on else "off"
+                    message = f"Fading candle {name} {label}."
                 except OSError as exc:
-                    message = f"Pixel candle command failed: {exc}"
+                    message = f"Pixel candle toggle failed: {exc}"
                 time.sleep(0.03)
                 continue
 
             if key in (ord("x"), ord("X")):
+                target_mask = candle_mask or state.pixel_active_mask
+                if target_mask == 0:
+                    message = "No selected candles to fade off."
+                    time.sleep(0.03)
+                    continue
                 try:
                     write_pixel_command(
                         bus,
-                        line_mask=0x0F,
-                        animation_id=PIXEL_ANIMATION_STATIC,
-                        base_rgb=(0, 0, 0),
-                        param_rgb=(0, 0, 0),
-                        duration_ms=0,
+                        line_mask=target_mask,
+                        animation_id=PIXEL_ANIMATION_CANDLE,
+                        base_rgb=(255, 96, 18),
+                        param_rgb=(32, 17, 0),
+                        duration_ms=1000,
                     )
+                    candle_mask &= ~target_mask
                     time.sleep(0.02)
                     state = read_state(bus)
-                    message = "Cleared all pixel lines."
+                    message = f"Fading selected candles off, mask 0x{target_mask:02x}."
                 except OSError as exc:
-                    message = f"Pixel clear command failed: {exc}"
+                    message = f"Pixel fade-off command failed: {exc}"
                 time.sleep(0.03)
                 continue
 
