@@ -2,7 +2,7 @@ from smbus2 import SMBus
 import curses
 
 addr = 0x12 # bus address
-bus = SMBus(0) # indicates /dev/ic2-1
+bus = SMBus(1) # indicates /dev/ic2-1
 
 numb = 1
 
