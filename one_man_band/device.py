@@ -26,6 +26,8 @@ BH1750_ONE_TIME_HIGH_RES_MODE: Final[int] = 0x20
 BH1750_MEASUREMENT_SECONDS: Final[float] = 0.18
 BH1750_UPDATE_SECONDS: Final[float] = 1.0
 BH1750_DEFAULT_THRESHOLD_LUX: Final[float] = 200.0
+SOLENOID_APPLY_TIMEOUT_SECONDS: Final[float] = 0.25
+SOLENOID_APPLY_POLL_SECONDS: Final[float] = 0.005
 
 REG_VERSION: Final[int] = 0x00
 REG_RAILS: Final[int] = 0x01
@@ -308,6 +310,23 @@ class DeviceController:
         elif reg == REG_SOLENOIDS:
             self._state.solenoids = value & 0x0F
 
+    def _wait_for_solenoid_apply(self, bus: SMBus, value: int) -> int:
+        expected = value & 0x0F
+        deadline = time.monotonic() + SOLENOID_APPLY_TIMEOUT_SECONDS
+        last_seen = -1
+        while time.monotonic() < deadline:
+            try:
+                last_seen = self._read_reg(bus, REG_SOLENOIDS) & 0x0F
+            except OSError:
+                time.sleep(SOLENOID_APPLY_POLL_SECONDS)
+                continue
+            if last_seen == expected:
+                return last_seen
+            time.sleep(SOLENOID_APPLY_POLL_SECONDS)
+        if last_seen >= 0:
+            return last_seen
+        return expected
+
     def _ambient_light_state_for_lux(self, lux: float | None) -> str:
         if lux is None:
             return "unknown"
@@ -539,6 +558,8 @@ class DeviceController:
             try:
                 with SMBus(I2C_BUS) as bus:
                     self._write_reg(bus, reg, value)
+                    if reg == REG_SOLENOIDS:
+                        value = self._wait_for_solenoid_apply(bus, value)
                     wrote_to_i2c = True
                 self._apply_cached_register(reg, value)
                 self._state.connected = True
@@ -581,19 +602,22 @@ class DeviceController:
         if name not in SOLENOIDS:
             raise ValueError(f"Unknown solenoid: {name}")
         mask = SOLENOIDS[name]
-        state = self.read_cached_state(refresh_gpio=False)
-        return self._update_register(REG_SOLENOIDS, state.solenoids ^ mask)
+        with self._lock:
+            state = self.read_cached_state(refresh_gpio=False)
+            return self._update_register(REG_SOLENOIDS, state.solenoids ^ mask)
 
     def set_solenoid(self, name: str, enabled: bool) -> DeviceState:
         if name not in SOLENOIDS:
             raise ValueError(f"Unknown solenoid: {name}")
         mask = SOLENOIDS[name]
-        state = self.read_cached_state(refresh_gpio=False)
-        value = (state.solenoids | mask) if enabled else (state.solenoids & ~mask)
-        return self._update_register(REG_SOLENOIDS, value)
+        with self._lock:
+            state = self.read_cached_state(refresh_gpio=False)
+            value = (state.solenoids | mask) if enabled else (state.solenoids & ~mask)
+            return self._update_register(REG_SOLENOIDS, value)
 
     def clear_solenoids(self) -> DeviceState:
-        return self._update_register(REG_SOLENOIDS, 0x00)
+        with self._lock:
+            return self._update_register(REG_SOLENOIDS, 0x00)
 
     def toggle_gpio_override(self, name: str) -> DeviceState:
         if name not in GPIO_INPUTS:
