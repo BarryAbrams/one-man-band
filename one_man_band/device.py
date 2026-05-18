@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import threading
-import time
 from dataclasses import asdict, dataclass
 from typing import Callable, Final
 
@@ -240,6 +239,19 @@ class DeviceController:
         state.rails = FIXED_RAIL_STATE
         return state
 
+    def _apply_cached_register(self, reg: int, value: int) -> None:
+        if reg == REG_RAILS:
+            self._state.rails = FIXED_RAIL_STATE
+        elif reg == REG_SOLENOIDS:
+            self._state.solenoids = value & 0x0F
+        elif reg == REG_SERVO_ENABLE_MASK:
+            self._state.servo_enable_mask = value & 0xFF
+        elif REG_SERVO_BASE <= reg < REG_SERVO_BASE + len(SERVO_CHANNELS):
+            if self._state.servo_values is None:
+                self._state.servo_values = [127 for _ in SERVO_CHANNELS]
+            self._state.servo_values[reg - REG_SERVO_BASE] = value & 0xFF
+            self._servo_value_cache[reg - REG_SERVO_BASE] = value & 0xFF
+
     def _snapshot_checksum(self, data: list[int]) -> int:
         return sum(data[:STATUS_SNAPSHOT_CHECKSUM_INDEX]) & 0xFF
 
@@ -363,17 +375,7 @@ class DeviceController:
             overrides = dict(self._state.gpio_input_overrides or {})
             pixel_command = dict(self._state.pixel_command or {})
             if self._mock_mode:
-                if reg == REG_RAILS:
-                    self._state.rails = FIXED_RAIL_STATE
-                elif reg == REG_SOLENOIDS:
-                    self._state.solenoids = value & 0x0F
-                elif reg == REG_SERVO_ENABLE_MASK:
-                    self._state.servo_enable_mask = value & 0xFF
-                elif REG_SERVO_BASE <= reg < REG_SERVO_BASE + len(SERVO_CHANNELS):
-                    if self._state.servo_values is None:
-                        self._state.servo_values = [127 for _ in SERVO_CHANNELS]
-                    self._state.servo_values[reg - REG_SERVO_BASE] = value & 0xFF
-                    self._servo_value_cache[reg - REG_SERVO_BASE] = value & 0xFF
+                self._apply_cached_register(reg, value)
                 self._state.connected = True
                 self._state.error = ""
                 self._state.status_source = "mock"
@@ -400,12 +402,13 @@ class DeviceController:
                 with SMBus(I2C_BUS) as bus:
                     self._write_reg(bus, reg, value)
                     wrote_to_i2c = True
-                time.sleep(0.05)
-                self._state = self._read_from_bus()
+                self._apply_cached_register(reg, value)
+                self._state.connected = True
+                self._state.error = ""
+                self._state.backend = "i2c"
+                self._state.status_source = "i2c_write_cache"
                 self._state.gpio_input_overrides = overrides
                 self._state.pixel_command = pixel_command
-                if REG_SERVO_BASE <= reg < REG_SERVO_BASE + len(SERVO_CHANNELS):
-                    self._servo_value_cache[reg - REG_SERVO_BASE] = value & 0xFF
                 self._apply_servo_value_cache()
             except OSError as exc:
                 gpio_inputs, gpio_error = self._read_gpio_inputs()
@@ -441,14 +444,14 @@ class DeviceController:
         if name not in SOLENOIDS:
             raise ValueError(f"Unknown solenoid: {name}")
         mask = SOLENOIDS[name]
-        state = self.read_state()
+        state = self.read_cached_state(refresh_gpio=False)
         return self._update_register(REG_SOLENOIDS, state.solenoids ^ mask)
 
     def set_solenoid(self, name: str, enabled: bool) -> DeviceState:
         if name not in SOLENOIDS:
             raise ValueError(f"Unknown solenoid: {name}")
         mask = SOLENOIDS[name]
-        state = self.read_state()
+        state = self.read_cached_state(refresh_gpio=False)
         value = (state.solenoids | mask) if enabled else (state.solenoids & ~mask)
         return self._update_register(REG_SOLENOIDS, value)
 
@@ -497,7 +500,7 @@ class DeviceController:
     def set_servo_enabled(self, channel: int, enabled: bool) -> DeviceState:
         if channel not in SERVO_CHANNELS:
             raise ValueError(f"Unknown servo channel: {channel}")
-        state = self.read_state()
+        state = self.read_cached_state(refresh_gpio=False)
         mask = 1 << channel
         value = (state.servo_enable_mask | mask) if enabled else (state.servo_enable_mask & ~mask)
         return self._update_register(REG_SERVO_ENABLE_MASK, value)
@@ -588,12 +591,13 @@ class DeviceController:
                 with SMBus(I2C_BUS) as bus:
                     self._write_block(bus, REG_PIXEL_COMMAND, payload)
                     wrote_to_i2c = True
-                next_state = self._read_from_bus()
-                next_state.gpio_input_overrides = dict(self._state.gpio_input_overrides or {})
-                next_state.pixel_command = self._pixel_command_payload(
+                self._state.connected = True
+                self._state.error = ""
+                self._state.backend = "i2c"
+                self._state.status_source = "i2c_write_cache"
+                self._state.pixel_command = self._pixel_command_payload(
                     rail_mask, start, count, start_rgb, end_rgb, duration_ms, animation_id
                 )
-                self._state = next_state
             except OSError as exc:
                 gpio_inputs, gpio_error = self._read_gpio_inputs()
                 self._state = DeviceState(

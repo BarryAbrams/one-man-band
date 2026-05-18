@@ -145,7 +145,8 @@ volatile uint8_t gRequestedServoValues[kServoChannelCount] = {127, 127, 127, 127
                                                               127, 127, 127, 127};
 volatile uint8_t gRequestedPixelCommand[kPixelCommandByteCount] = {};
 volatile uint8_t gLastRegisterPointer = kRegisterProtocolVersion;
-volatile bool gPendingControlApply = false;
+volatile bool gPendingSolenoidApply = false;
+volatile bool gPendingServoApply = false;
 volatile bool gPendingPixelCommand = false;
 volatile uint8_t gStatusSnapshot[kStatusSnapshotByteCount] = {};
 uint8_t gStatusSnapshotSequence = 0;
@@ -800,24 +801,30 @@ void applyPendingPixelCommand() {
 }
 
 void applyPendingControlState() {
-  if (!gPendingControlApply) {
+  if (!gPendingSolenoidApply && !gPendingServoApply) {
     return;
   }
 
   noInterrupts();
-  const uint8_t requestedRailState = gRequestedRailState;
+  const bool applySolenoids = gPendingSolenoidApply;
+  const bool applyServos = gPendingServoApply;
   const uint8_t requestedSolenoidState = gRequestedSolenoidState;
   const uint8_t requestedServoEnableMask = gRequestedServoEnableMask;
   uint8_t requestedServoValues[kServoChannelCount] = {};
   for (uint8_t index = 0; index < kServoChannelCount; ++index) {
     requestedServoValues[index] = gRequestedServoValues[index];
   }
-  gPendingControlApply = false;
+  gPendingSolenoidApply = false;
+  gPendingServoApply = false;
   interrupts();
 
-  applyRailState(requestedRailState);
-  applySolenoidState(requestedSolenoidState);
-  applyServoState(requestedServoEnableMask, requestedServoValues);
+  applyRailState(kFixedRailState);
+  if (applySolenoids) {
+    applySolenoidState(requestedSolenoidState);
+  }
+  if (applyServos) {
+    applyServoState(requestedServoEnableMask, requestedServoValues);
+  }
 
   Serial.print("Pi control applied, rails=0b");
   Serial.print(gAppliedRailState, BIN);
@@ -943,11 +950,11 @@ void onPiI2cReceive(int byteCount) {
     case kRegisterSolenoidState:
       gRequestedSolenoidState =
           static_cast<uint8_t>(Wire1.read()) & kSolenoidMask;
-      gPendingControlApply = true;
+      gPendingSolenoidApply = true;
       break;
     case kRegisterServoEnableMask:
       gRequestedServoEnableMask = static_cast<uint8_t>(Wire1.read());
-      gPendingControlApply = true;
+      gPendingServoApply = true;
       break;
     default:
       if (registerAddress >= kRegisterPixelCommandStart &&
@@ -973,7 +980,7 @@ void onPiI2cReceive(int byteCount) {
           gRequestedServoValues[servoRegister - kRegisterServo0Value] =
               static_cast<uint8_t>(Wire1.read());
           ++servoRegister;
-          gPendingControlApply = true;
+          gPendingServoApply = true;
         }
         while (Wire1.available()) {
           Wire1.read();
@@ -1175,5 +1182,5 @@ void loop() {
   applyPendingControlState();
   updatePixelAnimation();
   rebuildStatusSnapshot();
-  delay(50);
+  delay(1);
 }
