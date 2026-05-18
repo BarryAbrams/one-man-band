@@ -106,6 +106,24 @@
         <section class="panel">
           <div class="section-header">
             <p class="eyebrow">Inputs</p>
+            <h2>Ambient Light</h2>
+            <p class="section-copy">BH1750 reading from the Raspberry Pi I2C bus. Use Refresh to sample again.</p>
+          </div>
+          <div class="grid">
+            <section class="tile" :class="state.ambient_light_error ? '' : 'active'">
+              <span class="tile-title">BH1750</span>
+              <span class="tile-subtitle">Address 0x23</span>
+              <span class="tile-value" x-text="ambientLightLabel()"></span>
+            </section>
+          </div>
+          <template x-if="state.ambient_light_error">
+            <p class="error-text panel-note" x-text="state.ambient_light_error"></p>
+          </template>
+        </section>
+
+        <section class="panel">
+          <div class="section-header">
+            <p class="eyebrow">Inputs</p>
             <h2>Offboard</h2>
             <p class="section-copy">Reserved for network triggers, remote devices, and other incoming influences.</p>
           </div>
@@ -1506,6 +1524,9 @@
             gpio_physical_map: {},
             gpio_override_map: {},
             gpio_error: "",
+            ambient_light_lux: null,
+            ambient_light_raw: null,
+            ambient_light_error: "",
             audio_status: {},
             logic_timers: [],
             logic_action_events: [],
@@ -1697,6 +1718,13 @@
               animations: Array.isArray(payload.animations) ? payload.animations.length : undefined,
               error: payload.error || payload.message,
             };
+          },
+
+          ambientLightLabel() {
+            if (this.state.ambient_light_lux === null || this.state.ambient_light_lux === undefined) {
+              return "No reading";
+            }
+            return `${Number(this.state.ambient_light_lux).toFixed(1)} lx`;
           },
 
           defaultAnimation() {

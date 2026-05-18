@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from dataclasses import asdict, dataclass
 from typing import Callable, Final
 
@@ -18,6 +19,11 @@ except ImportError:  # pragma: no cover - depends on target hardware
 
 I2C_BUS: Final[int] = 1
 DEVICE: Final[int] = 0x12
+BH1750_ADDRESS: Final[int] = 0x23
+BH1750_POWER_ON: Final[int] = 0x01
+BH1750_RESET: Final[int] = 0x07
+BH1750_ONE_TIME_HIGH_RES_MODE: Final[int] = 0x20
+BH1750_MEASUREMENT_SECONDS: Final[float] = 0.18
 
 REG_VERSION: Final[int] = 0x00
 REG_RAILS: Final[int] = 0x01
@@ -105,6 +111,9 @@ class DeviceState:
     gpio_input_overrides: dict[str, bool] | None = None
     gpio_error: str = ""
     pixel_command: dict[str, object] | None = None
+    ambient_light_lux: float | None = None
+    ambient_light_raw: int | None = None
+    ambient_light_error: str = ""
 
     def to_payload(self) -> dict[str, object]:
         return {
@@ -162,6 +171,8 @@ class DeviceController:
             gpio_inputs={name: False for name in GPIO_INPUTS},
             gpio_input_overrides={},
             pixel_command={},
+            ambient_light_lux=0.0 if self._mock_mode else None,
+            ambient_light_raw=0 if self._mock_mode else None,
         )
         self._setup_gpio()
 
@@ -230,6 +241,22 @@ class DeviceController:
 
     def _read_block(self, bus: SMBus, reg: int, length: int) -> list[int]:
         return [value & 0xFF for value in bus.read_i2c_block_data(DEVICE, reg, length)]
+
+    def _read_ambient_light(self, bus: SMBus) -> tuple[float | None, int | None, str]:
+        try:
+            bus.write_byte(BH1750_ADDRESS, BH1750_POWER_ON)
+            bus.write_byte(BH1750_ADDRESS, BH1750_RESET)
+            bus.write_byte(BH1750_ADDRESS, BH1750_ONE_TIME_HIGH_RES_MODE)
+            time.sleep(BH1750_MEASUREMENT_SECONDS)
+            data = bus.read_i2c_block_data(
+                BH1750_ADDRESS,
+                BH1750_ONE_TIME_HIGH_RES_MODE,
+                2,
+            )
+            raw = ((data[0] & 0xFF) << 8) | (data[1] & 0xFF)
+            return (raw / 1.2, raw, "")
+        except OSError as exc:
+            return (None, None, str(exc))
 
     def _with_fixed_rails(self, state: DeviceState) -> DeviceState:
         state.rails = FIXED_RAIL_STATE
@@ -309,9 +336,15 @@ class DeviceController:
                 last_error: OSError | None = None
                 for _attempt in range(5):
                     try:
-                        return self._with_fixed_rails(
+                        state = self._with_fixed_rails(
                             self._read_snapshot_state(bus, gpio_inputs, gpio_error)
                         )
+                        (
+                            state.ambient_light_lux,
+                            state.ambient_light_raw,
+                            state.ambient_light_error,
+                        ) = self._read_ambient_light(bus)
+                        return state
                     except OSError as exc:
                         last_error = exc
                 return DeviceState(
