@@ -1,4 +1,4 @@
-from smbus import SMBus
+from smbus2 import SMBus
 import curses
 
 addr = 0x12 # bus address
