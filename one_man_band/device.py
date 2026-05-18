@@ -28,6 +28,8 @@ BH1750_UPDATE_SECONDS: Final[float] = 1.0
 BH1750_DEFAULT_THRESHOLD_LUX: Final[float] = 200.0
 I2C_WRITE_ATTEMPTS: Final[int] = 5
 I2C_WRITE_RETRY_SECONDS: Final[float] = 0.01
+SOLENOID_WRITE_REPEATS: Final[int] = 3
+SOLENOID_WRITE_REPEAT_SECONDS: Final[float] = 0.02
 
 REG_VERSION: Final[int] = 0x00
 REG_RAILS: Final[int] = 0x01
@@ -324,6 +326,23 @@ class DeviceController:
                     time.sleep(I2C_WRITE_RETRY_SECONDS)
         raise last_error or OSError("I2C write failed")
 
+    def _write_solenoid_mask(self, value: int) -> None:
+        repeats = max(
+            1,
+            self._int_env("OMB_SOLENOID_WRITE_REPEATS", SOLENOID_WRITE_REPEATS),
+        )
+        repeat_seconds = max(
+            0.0,
+            self._float_env(
+                "OMB_SOLENOID_WRITE_REPEAT_SECONDS",
+                SOLENOID_WRITE_REPEAT_SECONDS,
+            ),
+        )
+        for repeat in range(repeats):
+            self._write_reg_with_retries(REG_SOLENOIDS, value & 0x0F)
+            if repeat + 1 < repeats and repeat_seconds > 0:
+                time.sleep(repeat_seconds)
+
     def _ambient_light_state_for_lux(self, lux: float | None) -> str:
         if lux is None:
             return "unknown"
@@ -554,7 +573,7 @@ class DeviceController:
 
             try:
                 if reg == REG_SOLENOIDS:
-                    self._write_reg_with_retries(reg, value)
+                    self._write_solenoid_mask(value)
                 else:
                     with SMBus(I2C_BUS) as bus:
                         self._write_reg(bus, reg, value)

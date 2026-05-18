@@ -44,7 +44,8 @@ constexpr uint8_t kPixelCommandSize =
     kRegisterPixelCommandEnd - kRegisterPixelCommandStart + 1;
 constexpr uint8_t kPixelAnimationStatic = 0;
 constexpr uint8_t kPixelAnimationCandleFlicker = 1;
-constexpr unsigned long kCandleFlickerFrameMs = 45;
+constexpr uint8_t kCandleFlickerFps = 20;
+constexpr unsigned long kCandleFlickerFrameMs = 1000 / kCandleFlickerFps;
 constexpr unsigned long kRailReassertMs = 250;
 
 constexpr uint8_t kCommandQueueSize = 32;
