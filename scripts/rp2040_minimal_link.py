@@ -212,7 +212,7 @@ def main(screen) -> None:
                         bus,
                         line_mask=mask,
                         animation_id=PIXEL_ANIMATION_CANDLE,
-                        base_rgb=(255, 0, 0),
+                        base_rgb=(0, 255, 0),
                         param_rgb=(32, 17, 230 if turning_on else 0),
                         duration_ms=1000,
                     )
@@ -240,7 +240,7 @@ def main(screen) -> None:
                         bus,
                         line_mask=target_mask,
                         animation_id=PIXEL_ANIMATION_CANDLE,
-                        base_rgb=(255, 0, 0),
+                        base_rgb=(0, 255, 0),
                         param_rgb=(32, 17, 0),
                         duration_ms=1000,
                     )
