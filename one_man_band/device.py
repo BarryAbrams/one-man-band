@@ -4,6 +4,7 @@ import os
 import threading
 from dataclasses import asdict, dataclass
 from typing import Callable, Final
+import time
 
 try:
     from smbus2 import SMBus
