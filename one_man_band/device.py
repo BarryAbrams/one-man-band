@@ -26,8 +26,8 @@ BH1750_ONE_TIME_HIGH_RES_MODE: Final[int] = 0x20
 BH1750_MEASUREMENT_SECONDS: Final[float] = 0.18
 BH1750_UPDATE_SECONDS: Final[float] = 1.0
 BH1750_DEFAULT_THRESHOLD_LUX: Final[float] = 200.0
-SOLENOID_APPLY_TIMEOUT_SECONDS: Final[float] = 0.25
-SOLENOID_APPLY_POLL_SECONDS: Final[float] = 0.005
+I2C_WRITE_ATTEMPTS: Final[int] = 5
+I2C_WRITE_RETRY_SECONDS: Final[float] = 0.01
 
 REG_VERSION: Final[int] = 0x00
 REG_RAILS: Final[int] = 0x01
@@ -310,22 +310,19 @@ class DeviceController:
         elif reg == REG_SOLENOIDS:
             self._state.solenoids = value & 0x0F
 
-    def _wait_for_solenoid_apply(self, bus: SMBus, value: int) -> int:
-        expected = value & 0x0F
-        deadline = time.monotonic() + SOLENOID_APPLY_TIMEOUT_SECONDS
-        last_seen = -1
-        while time.monotonic() < deadline:
+    def _write_reg_with_retries(self, reg: int, value: int) -> None:
+        attempts = max(1, self._int_env("OMB_I2C_WRITE_ATTEMPTS", I2C_WRITE_ATTEMPTS))
+        last_error: OSError | None = None
+        for attempt in range(attempts):
             try:
-                last_seen = self._read_reg(bus, REG_SOLENOIDS) & 0x0F
-            except OSError:
-                time.sleep(SOLENOID_APPLY_POLL_SECONDS)
-                continue
-            if last_seen == expected:
-                return last_seen
-            time.sleep(SOLENOID_APPLY_POLL_SECONDS)
-        if last_seen >= 0:
-            return last_seen
-        return expected
+                with SMBus(I2C_BUS) as bus:
+                    self._write_reg(bus, reg, value)
+                return
+            except OSError as exc:
+                last_error = exc
+                if attempt + 1 < attempts:
+                    time.sleep(I2C_WRITE_RETRY_SECONDS)
+        raise last_error or OSError("I2C write failed")
 
     def _ambient_light_state_for_lux(self, lux: float | None) -> str:
         if lux is None:
@@ -556,11 +553,12 @@ class DeviceController:
                 return DeviceState(**asdict(self._state))
 
             try:
-                with SMBus(I2C_BUS) as bus:
-                    self._write_reg(bus, reg, value)
-                    if reg == REG_SOLENOIDS:
-                        value = self._wait_for_solenoid_apply(bus, value)
-                    wrote_to_i2c = True
+                if reg == REG_SOLENOIDS:
+                    self._write_reg_with_retries(reg, value)
+                else:
+                    with SMBus(I2C_BUS) as bus:
+                        self._write_reg(bus, reg, value)
+                wrote_to_i2c = True
                 self._apply_cached_register(reg, value)
                 self._state.connected = True
                 self._state.error = ""

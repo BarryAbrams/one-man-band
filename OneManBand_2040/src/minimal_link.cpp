@@ -370,7 +370,6 @@ void initializePixelLines() {
 }
 
 bool updatePixelAnimations() {
-  bool changed = false;
   const unsigned long now = millis();
   for (uint8_t lineIndex = 0; lineIndex < kPixelLineCount; ++lineIndex) {
     PixelAnimation& animation = gPixelAnimations[lineIndex];
@@ -390,10 +389,12 @@ bool updatePixelAnimations() {
                         animation.startIndex, animation.count, black);
       animation.active = false;
       gState.pixelLines[lineIndex].active = false;
-      changed = true;
+      return true;
     }
+
+    return false;
   }
-  return changed;
+  return false;
 }
 
 uint8_t snapshotChecksum(const uint8_t* snapshot) {
