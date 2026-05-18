@@ -275,7 +275,6 @@ class DeviceController:
     def _update_ambient_light_once_per_second(self, bus: SMBus, state: DeviceState) -> None:
         now = time.monotonic()
 
-        print(f"Ambient light: {state.ambient_light_lux} lux, "f"raw value {state.ambient_light_raw}, "f"error: {state.ambient_light_error}")
 
         if now - self._last_bh1750_read_at < BH1750_UPDATE_SECONDS:
             state.ambient_light_lux = self._state.ambient_light_lux
@@ -293,6 +292,8 @@ class DeviceController:
 
         lux = state.ambient_light_lux
         is_over_threshold = lux is not None and lux > BH1750_THRESHOLD_LUX
+
+        print(f"Ambient light: {lux} lux, raw value {state.ambient_light_raw}, error: {state.ambient_light_error}")
 
         if is_over_threshold and not self._bh1750_was_over_threshold:
             print(
