@@ -483,12 +483,40 @@ def create_app() -> Flask:
 
 
 def _broadcast_state() -> None:
-    socketio.emit("state:update", _combined_state())
+    _socketio_emit_state_update(_combined_state(), "broadcast")
+
+
+def _state_update_log_line(source: str, payload: dict[str, object]) -> str:
+    return (
+        f"[state:update] source={source} "
+        f"connected={payload.get('connected')} "
+        f"backend={payload.get('backend')} "
+        f"rails={payload.get('rails_map')} "
+        f"solenoids={payload.get('solenoids_map')} "
+        f"error={payload.get('error') or ''}"
+    )
+
+
+def _log_state_update(source: str, payload: dict[str, object]) -> None:
+    print(_state_update_log_line(source, payload), flush=True)
+
+
+def _socketio_emit_state_update(payload: dict[str, object], source: str) -> None:
+    _log_state_update(source, payload)
+    socketio.emit("state:update", payload)
+
+
+def _emit_state_update(
+    payload: dict[str, object],
+    source: str,
+    broadcast: bool = False,
+) -> None:
+    _log_state_update(source, payload)
+    emit("state:update", payload, broadcast=broadcast)
 
 
 def _broadcast_i2c_write_state(state) -> None:
-    socketio.emit(
-        "state:update",
+    _socketio_emit_state_update(
         {
             **state.to_payload(),
             "audio_status": audio_manager.status().to_payload(),
@@ -496,6 +524,7 @@ def _broadcast_i2c_write_state(state) -> None:
             "logic_action_events": logic_engine.action_events_payload(),
             "node_control": node_control.payload(),
         },
+        "i2c_write",
     )
 
 
@@ -505,7 +534,7 @@ def _emit_state_without_i2c_write(state, include_audio: bool = False) -> None:
     payload = state.to_payload()
     if include_audio:
         payload = {**payload, "audio_status": audio_manager.status().to_payload()}
-    emit("state:update", payload, broadcast=True)
+    _emit_state_update(payload, "handler_non_i2c", broadcast=True)
 
 
 controller.set_i2c_write_listener(_broadcast_i2c_write_state)
@@ -516,7 +545,7 @@ def _poll_state_forever() -> None:
         socketio.sleep(STATE_POLL_SECONDS)
         if _shutdown_event.is_set():
             break
-        socketio.emit("state:update", _combined_state(process_logic=True))
+        _socketio_emit_state_update(_combined_state(process_logic=True), "poll")
 
 
 def shutdown() -> None:
@@ -568,12 +597,12 @@ def create_socketio(app: Flask) -> SocketIO:
 @socketio.on("connect")
 def handle_connect():
     emit("meta:init", _metadata())
-    emit("state:update", _combined_state())
+    _emit_state_update(_combined_state(), "connect")
 
 
 @socketio.on("state:refresh")
 def handle_refresh():
-    emit("state:update", _combined_state(refresh_hardware=True))
+    _emit_state_update(_combined_state(refresh_hardware=True), "refresh")
 
 
 @socketio.on("rail:toggle")
@@ -626,7 +655,11 @@ def handle_servos_set_all(payload: dict[str, bool]):
 def handle_gpio_override_toggle(payload: dict[str, str]):
     try:
         state = controller.toggle_gpio_override(payload["name"])
-        emit("state:update", {**state.to_payload(), "audio_status": audio_manager.status().to_payload()}, broadcast=True)
+        _emit_state_update(
+            {**state.to_payload(), "audio_status": audio_manager.status().to_payload()},
+            "gpio_override_toggle",
+            broadcast=True,
+        )
     except (KeyError, ValueError) as exc:
         emit("server:error", {"message": str(exc)})
 
@@ -635,7 +668,11 @@ def handle_gpio_override_toggle(payload: dict[str, str]):
 def handle_gpio_override_clear(payload: dict[str, str]):
     try:
         state = controller.clear_gpio_override(payload["name"])
-        emit("state:update", {**state.to_payload(), "audio_status": audio_manager.status().to_payload()}, broadcast=True)
+        _emit_state_update(
+            {**state.to_payload(), "audio_status": audio_manager.status().to_payload()},
+            "gpio_override_clear",
+            broadcast=True,
+        )
     except (KeyError, ValueError) as exc:
         emit("server:error", {"message": str(exc)})
 
@@ -643,7 +680,11 @@ def handle_gpio_override_clear(payload: dict[str, str]):
 @socketio.on("gpio:override_clear_all")
 def handle_gpio_override_clear_all():
     state = controller.clear_all_gpio_overrides()
-    emit("state:update", {**state.to_payload(), "audio_status": audio_manager.status().to_payload()}, broadcast=True)
+    _emit_state_update(
+        {**state.to_payload(), "audio_status": audio_manager.status().to_payload()},
+        "gpio_override_clear_all",
+        broadcast=True,
+    )
 
 
 @socketio.on("servo:set_enabled")
