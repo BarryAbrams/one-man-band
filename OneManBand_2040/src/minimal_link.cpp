@@ -27,6 +27,11 @@ constexpr uint8_t kRegisterPixelCommandStart = 0x40;
 constexpr uint8_t kRegisterPixelCommandEnd = 0x4C;
 constexpr uint8_t kRegisterPixelTrigger = 0x4B;
 constexpr uint8_t kRegisterPixelAnimationId = 0x4C;
+constexpr uint8_t kRegisterStatusSnapshot = 0x60;
+constexpr uint8_t kStatusSnapshotLength = 16;
+constexpr uint8_t kStatusSnapshotMagic = 0xA5;
+constexpr uint8_t kStatusSnapshotVersion = 1;
+constexpr uint8_t kStatusSnapshotChecksumIndex = kStatusSnapshotLength - 1;
 
 constexpr uint8_t kRailMask = 0x0F;
 constexpr uint8_t kRelayMask = 0x0F;
@@ -92,6 +97,8 @@ volatile uint8_t gCommandHead = 0;
 volatile uint8_t gCommandTail = 0;
 volatile uint32_t gQueuedCommandCount = 0;
 volatile uint32_t gDroppedCommandCount = 0;
+volatile uint8_t gLastRegisterPointer = kRegisterStatusSnapshot;
+volatile uint8_t gStatusSnapshot[kStatusSnapshotLength] = {};
 
 void writeRailOutput(const RailOutput& output, bool enabled) {
   const uint8_t disabledLevel = output.enabledLevel == HIGH ? LOW : HIGH;
@@ -140,6 +147,39 @@ bool applyRelayOutputs(uint8_t relayMask) {
                                  relayMask & kRelayMask);
 }
 
+uint8_t snapshotChecksum(const uint8_t* snapshot) {
+  uint8_t checksum = 0;
+  for (uint8_t index = 0; index < kStatusSnapshotChecksumIndex; ++index) {
+    checksum = static_cast<uint8_t>(checksum + snapshot[index]);
+  }
+  return static_cast<uint8_t>(0u - checksum);
+}
+
+void rebuildStatusSnapshot() {
+  uint8_t snapshot[kStatusSnapshotLength] = {};
+  snapshot[0] = kStatusSnapshotMagic;
+  snapshot[1] = kStatusSnapshotVersion;
+  snapshot[2] = gState.railMask;
+  snapshot[3] = gState.relayMask;
+  snapshot[4] = gState.servoEnableMask;
+  for (uint8_t index = 0; index < kServoCount; ++index) {
+    snapshot[5 + index] = gState.servoValues[index];
+  }
+  for (uint8_t line = 0; line < kPixelLineCount; ++line) {
+    if (gState.pixelLines[line].active) {
+      snapshot[13] |= static_cast<uint8_t>(1u << line);
+    }
+  }
+  snapshot[14] = gTca9534Ready ? 1 : 0;
+  snapshot[kStatusSnapshotChecksumIndex] = snapshotChecksum(snapshot);
+
+  noInterrupts();
+  for (uint8_t index = 0; index < kStatusSnapshotLength; ++index) {
+    gStatusSnapshot[index] = snapshot[index];
+  }
+  interrupts();
+}
+
 bool queueIsFull() {
   const uint8_t nextHead =
       static_cast<uint8_t>((gCommandHead + 1) % kCommandQueueSize);
@@ -148,6 +188,11 @@ bool queueIsFull() {
 
 void receiveEvent(int byteCount) {
   if (byteCount <= 0) {
+    return;
+  }
+
+  if (byteCount == 1) {
+    gLastRegisterPointer = static_cast<uint8_t>(Wire1.read());
     return;
   }
 
@@ -177,7 +222,17 @@ void receiveEvent(int byteCount) {
 }
 
 void requestEvent() {
-  // Status readback is intentionally not part of this minimal link yet.
+  if (gLastRegisterPointer == kRegisterStatusSnapshot) {
+    uint8_t snapshot[kStatusSnapshotLength] = {};
+    noInterrupts();
+    for (uint8_t index = 0; index < kStatusSnapshotLength; ++index) {
+      snapshot[index] = gStatusSnapshot[index];
+    }
+    interrupts();
+    Wire1.write(snapshot, kStatusSnapshotLength);
+    return;
+  }
+
   Wire1.write(static_cast<uint8_t>(0));
 }
 
@@ -295,17 +350,6 @@ bool processCommand(const I2cCommand& command) {
 
   ++gState.receivedCommandCount;
 
-  if (command.size == 1) {
-    // Keeps the old one-byte test script useful: one byte means relay mask.
-    const uint8_t nextRelayMask = command.bytes[0] & kRelayMask;
-    const bool changed = gState.relayMask != nextRelayMask;
-    gState.relayMask = nextRelayMask;
-    if (!applyRelayOutputs(gState.relayMask)) {
-      Serial.println("TCA9534 write FAILED while applying relay state");
-    }
-    return changed;
-  }
-
   return applyRegisterWrite(command.bytes[0], &command.bytes[1],
                             command.size - 1);
 }
@@ -365,6 +409,7 @@ void setup() {
   Wire.begin();
   initializeTca9534();
   applyRelayOutputs(gState.relayMask);
+  rebuildStatusSnapshot();
 
   Wire1.setSDA(kPiI2cSdaPin);
   Wire1.setSCL(kPiI2cSclPin);
@@ -391,6 +436,7 @@ void loop() {
   }
 
   if (changed) {
+    rebuildStatusSnapshot();
     printStateSummary();
   }
 
