@@ -1,5 +1,6 @@
 
 from smbus2 import SMBus
+import sys
 
 addr = 0x12
 bus = SMBus(1)
