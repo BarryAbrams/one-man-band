@@ -486,6 +486,31 @@ def _broadcast_state() -> None:
     socketio.emit("state:update", _combined_state())
 
 
+def _broadcast_i2c_write_state(state) -> None:
+    socketio.emit(
+        "state:update",
+        {
+            **state.to_payload(),
+            "audio_status": audio_manager.status().to_payload(),
+            "logic_timers": logic_engine.timers_payload(),
+            "logic_action_events": logic_engine.action_events_payload(),
+            "node_control": node_control.payload(),
+        },
+    )
+
+
+def _emit_state_without_i2c_write(state, include_audio: bool = False) -> None:
+    if state.backend == "i2c" and state.connected:
+        return
+    payload = state.to_payload()
+    if include_audio:
+        payload = {**payload, "audio_status": audio_manager.status().to_payload()}
+    emit("state:update", payload, broadcast=True)
+
+
+controller.set_i2c_write_listener(_broadcast_i2c_write_state)
+
+
 def _poll_state_forever() -> None:
     while not _shutdown_event.is_set():
         socketio.sleep(STATE_POLL_SECONDS)
@@ -555,7 +580,7 @@ def handle_refresh():
 def handle_rail_toggle(payload: dict[str, str]):
     try:
         state = controller.toggle_rail(payload["name"])
-        emit("state:update", state.to_payload(), broadcast=True)
+        _emit_state_without_i2c_write(state)
         print(f"Toggled rail {payload['name']}")
     except (KeyError, ValueError) as exc:
         emit("server:error", {"message": str(exc)})
@@ -564,14 +589,14 @@ def handle_rail_toggle(payload: dict[str, str]):
 @socketio.on("rails:set_all")
 def handle_rails_set_all(payload: dict[str, bool]):
     state = controller.set_all_rails(bool(payload["enabled"]))
-    emit("state:update", state.to_payload(), broadcast=True)
+    _emit_state_without_i2c_write(state)
 
 
 @socketio.on("solenoid:toggle")
 def handle_solenoid_toggle(payload: dict[str, str]):
     try:
         state = controller.toggle_solenoid(payload["name"])
-        emit("state:update", state.to_payload(), broadcast=True)
+        _emit_state_without_i2c_write(state)
     except (KeyError, ValueError) as exc:
         emit("server:error", {"message": str(exc)})
 
@@ -580,7 +605,7 @@ def handle_solenoid_toggle(payload: dict[str, str]):
 def handle_solenoid_set(payload: dict[str, object]):
     try:
         state = controller.set_solenoid(str(payload["name"]), bool(payload["enabled"]))
-        emit("state:update", state.to_payload(), broadcast=True)
+        _emit_state_without_i2c_write(state)
     except (KeyError, TypeError, ValueError) as exc:
         emit("server:error", {"message": str(exc)})
 
@@ -588,13 +613,13 @@ def handle_solenoid_set(payload: dict[str, object]):
 @socketio.on("solenoids:clear")
 def handle_solenoids_clear():
     state = controller.clear_solenoids()
-    emit("state:update", state.to_payload(), broadcast=True)
+    _emit_state_without_i2c_write(state)
 
 
 @socketio.on("servos:set_all")
 def handle_servos_set_all(payload: dict[str, bool]):
     state = controller.set_all_servos_enabled(bool(payload["enabled"]))
-    emit("state:update", state.to_payload(), broadcast=True)
+    _emit_state_without_i2c_write(state)
 
 
 @socketio.on("gpio:override_toggle")
@@ -627,7 +652,7 @@ def handle_servo_set_enabled(payload: dict[str, object]):
         channel = int(payload["channel"])
         enabled = bool(payload["enabled"])
         state = controller.set_servo_enabled(channel, enabled)
-        emit("state:update", state.to_payload(), broadcast=True)
+        _emit_state_without_i2c_write(state)
     except (KeyError, TypeError, ValueError) as exc:
         emit("server:error", {"message": str(exc)})
 
@@ -638,7 +663,7 @@ def handle_servo_set_value(payload: dict[str, object]):
         channel = int(payload["channel"])
         value = int(payload["value"])
         state = controller.set_servo_value(channel, value)
-        emit("state:update", state.to_payload(), broadcast=True)
+        _emit_state_without_i2c_write(state)
     except (KeyError, TypeError, ValueError) as exc:
         emit("server:error", {"message": str(exc)})
 
@@ -662,7 +687,7 @@ def handle_pixels_animate(payload: dict[str, object]):
             duration_ms=int(payload["duration_ms"]),
             animation_id=int(payload.get("animation_id", 0)),
         )
-        emit("state:update", {**state.to_payload(), "audio_status": audio_manager.status().to_payload()}, broadcast=True)
+        _emit_state_without_i2c_write(state, include_audio=True)
     except (KeyError, TypeError, ValueError) as exc:
         emit("server:error", {"message": str(exc)})
 

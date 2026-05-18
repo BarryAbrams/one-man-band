@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import threading
 from dataclasses import asdict, dataclass
-from typing import Final
+from typing import Callable, Final
 
 try:
     from smbus2 import SMBus
@@ -172,6 +172,7 @@ class DeviceState:
 class DeviceController:
     def __init__(self) -> None:
         self._lock = threading.RLock()
+        self._i2c_write_listener: Callable[[DeviceState], None] | None = None
         self._mock_mode = os.environ.get("OMB_MOCK_HARDWARE", "0") == "1"
         self._gpio_mode = os.environ.get("OMB_GPIO_PULL", "up").strip().lower()
         self._gpio_ready = False
@@ -190,6 +191,16 @@ class DeviceController:
             pixel_command={},
         )
         self._setup_gpio()
+
+    def set_i2c_write_listener(
+        self, listener: Callable[[DeviceState], None] | None
+    ) -> None:
+        self._i2c_write_listener = listener
+
+    def _notify_i2c_write(self, state: DeviceState) -> None:
+        if self._mock_mode or self._i2c_write_listener is None:
+            return
+        self._i2c_write_listener(DeviceState(**asdict(state)))
 
     def _setup_gpio(self) -> None:
         if GPIO is None:
@@ -331,6 +342,7 @@ class DeviceController:
 
     def _update_register(self, reg: int, value: int) -> DeviceState:
         with self._lock:
+            wrote_to_i2c = False
             overrides = dict(self._state.gpio_input_overrides or {})
             pixel_command = dict(self._state.pixel_command or {})
             if self._mock_mode:
@@ -368,6 +380,7 @@ class DeviceController:
             try:
                 with SMBus(I2C_BUS) as bus:
                     self._write_reg(bus, reg, value)
+                    wrote_to_i2c = True
                 self._state = self._read_from_bus()
                 self._state.gpio_input_overrides = overrides
                 self._state.pixel_command = pixel_command
@@ -385,7 +398,10 @@ class DeviceController:
                     gpio_input_overrides=overrides,
                     pixel_command=pixel_command,
                 )
-            return DeviceState(**asdict(self._state))
+            result = DeviceState(**asdict(self._state))
+        if wrote_to_i2c:
+            self._notify_i2c_write(result)
+        return result
 
     def toggle_rail(self, name: str) -> DeviceState:
         if name not in RAILS:
@@ -535,6 +551,7 @@ class DeviceController:
         ]
 
         with self._lock:
+            wrote_to_i2c = False
             if self._mock_mode:
                 self._state.pixel_command = self._pixel_command_payload(
                     rail_mask, start, count, start_rgb, end_rgb, duration_ms, animation_id
@@ -557,6 +574,7 @@ class DeviceController:
             try:
                 with SMBus(I2C_BUS) as bus:
                     self._write_block(bus, REG_PIXEL_COMMAND, payload)
+                    wrote_to_i2c = True
                 next_state = self._read_from_bus()
                 next_state.gpio_input_overrides = dict(self._state.gpio_input_overrides or {})
                 next_state.pixel_command = self._pixel_command_payload(
@@ -574,7 +592,10 @@ class DeviceController:
                     gpio_input_overrides=dict(self._state.gpio_input_overrides or {}),
                     pixel_command=dict(self._state.pixel_command or {}),
                 )
-            return DeviceState(**asdict(self._state))
+            result = DeviceState(**asdict(self._state))
+        if wrote_to_i2c:
+            self._notify_i2c_write(result)
+        return result
 
     def _pixel_command_payload(
         self,
