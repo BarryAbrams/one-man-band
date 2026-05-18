@@ -56,7 +56,7 @@ def checksum(data: list[int]) -> int:
     return (-sum(data[:-1])) & 0xFF
 
 
-def read_state(bus: SMBus) -> ControlState:
+def _read_state_once(bus: SMBus) -> ControlState:
     data = bus.read_i2c_block_data(ADDRESS, REG_STATUS_SNAPSHOT, STATUS_SNAPSHOT_LENGTH)
     if len(data) != STATUS_SNAPSHOT_LENGTH:
         raise OSError(f"short status snapshot: expected {STATUS_SNAPSHOT_LENGTH}, got {len(data)}")
@@ -74,6 +74,17 @@ def read_state(bus: SMBus) -> ControlState:
         pixel_active_mask=data[13] & 0x0F,
         tca_ready=bool(data[14]),
     )
+
+
+def read_state(bus: SMBus, attempts: int = 5) -> ControlState:
+    last_error: OSError | None = None
+    for _ in range(attempts):
+        try:
+            return _read_state_once(bus)
+        except OSError as exc:
+            last_error = exc
+            time.sleep(0.03)
+    raise last_error or OSError("status read failed")
 
 
 def push_state(bus: SMBus, state: ControlState) -> None:
@@ -213,8 +224,11 @@ def main(screen) -> None:
                         duration_ms=1000,
                     )
                     candle_mask = (candle_mask | mask) if turning_on else (candle_mask & ~mask)
-                    time.sleep(0.02)
-                    state = read_state(bus)
+                    state.pixel_active_mask = (
+                        state.pixel_active_mask | mask
+                        if turning_on
+                        else state.pixel_active_mask & ~mask
+                    )
                     label = "on" if turning_on else "off"
                     message = f"Fading candle {name} {label}."
                 except OSError as exc:
@@ -238,8 +252,7 @@ def main(screen) -> None:
                         duration_ms=1000,
                     )
                     candle_mask &= ~target_mask
-                    time.sleep(0.02)
-                    state = read_state(bus)
+                    state.pixel_active_mask &= ~target_mask
                     message = f"Fading selected candles off, mask 0x{target_mask:02x}."
                 except OSError as exc:
                     message = f"Pixel fade-off command failed: {exc}"

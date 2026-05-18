@@ -48,6 +48,7 @@ constexpr uint8_t kPixelCommandSize =
 constexpr uint8_t kPixelAnimationStatic = 0;
 constexpr uint8_t kPixelAnimationCandleFlicker = 1;
 constexpr unsigned long kCandleFlickerFrameMs = 45;
+constexpr unsigned long kRailReassertMs = 250;
 
 constexpr uint8_t kCommandQueueSize = 8;
 constexpr uint8_t kMaxCommandBytes = 16;
@@ -110,6 +111,7 @@ ControllerState gState;
 uint8_t gPixelCommand[kPixelCommandSize] = {};
 bool gTca9534Ready = false;
 PixelAnimation gPixelAnimations[kPixelLineCount] = {};
+unsigned long gLastRailReassertMs = 0;
 
 constexpr RailOutput kRailOutputs[] = {
     {static_cast<uint8_t>(1u << 0), k12vAEnablePin, HIGH},
@@ -739,6 +741,12 @@ void setup() {
 }
 
 void loop() {
+  const unsigned long now = millis();
+  if (now - gLastRailReassertMs >= kRailReassertMs) {
+    applyRailOutputs(gState.railMask);
+    gLastRailReassertMs = now;
+  }
+
   bool changed = updatePixelAnimations();
 
   I2cCommand command;
