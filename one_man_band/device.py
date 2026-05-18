@@ -275,6 +275,8 @@ class DeviceController:
     def _update_ambient_light_once_per_second(self, bus: SMBus, state: DeviceState) -> None:
         now = time.monotonic()
 
+        print(f"Ambient light: {state.ambient_light_lux} lux, "f"raw value {state.ambient_light_raw}, "f"error: {state.ambient_light_error}")
+
         if now - self._last_bh1750_read_at < BH1750_UPDATE_SECONDS:
             state.ambient_light_lux = self._state.ambient_light_lux
             state.ambient_light_raw = self._state.ambient_light_raw
