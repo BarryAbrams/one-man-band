@@ -54,12 +54,21 @@ class AudioManager:
             return True
 
         try:
-            pygame.mixer.init(
-                frequency=int(os.environ.get("OMB_AUDIO_RATE", "44100")),
-                size=int(os.environ.get("OMB_AUDIO_SIZE", "-16")),
-                channels=int(os.environ.get("OMB_AUDIO_CHANNELS", "2")),
-                buffer=int(os.environ.get("OMB_AUDIO_BUFFER", "1024")),
-            )
+            audio_driver = os.environ.get("OMB_AUDIO_DRIVER")
+            if audio_driver:
+                os.environ.setdefault("SDL_AUDIODRIVER", audio_driver)
+
+            init_args = {
+                "frequency": int(os.environ.get("OMB_AUDIO_RATE", "44100")),
+                "size": int(os.environ.get("OMB_AUDIO_SIZE", "-16")),
+                "channels": int(os.environ.get("OMB_AUDIO_CHANNELS", "2")),
+                "buffer": int(os.environ.get("OMB_AUDIO_BUFFER", "1024")),
+            }
+            audio_device = os.environ.get("OMB_AUDIO_DEVICE")
+            if audio_device:
+                init_args["devicename"] = audio_device
+
+            pygame.mixer.init(**init_args)
             pygame.mixer.music.set_volume(self._status.volume)
             self._status.available = True
             self._status.initialized = True

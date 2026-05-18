@@ -45,6 +45,20 @@ python scripts/pi_hardware_health.py
 The script checks package imports, `/dev/i2c-1`, the RP2040 at address `0x12`,
 GPIO reads, ALSA device visibility, and pygame mixer initialization.
 
+To route app audio to a different ALSA/SDL output, set these before starting the
+app:
+
+```bash
+export OMB_AUDIO_DRIVER=alsa
+export OMB_AUDIO_DEVICE="default"
+python app.py
+```
+
+For HDMI audio on Raspberry Pi OS, remove or comment out the I2S DAC overlay in
+`/boot/firmware/config.txt`, make sure the `dtoverlay=vc4-kms-v3d` line does not
+include `noaudio`, reboot, then use `aplay -l` and `speaker-test` to find and
+test the HDMI card before starting the app.
+
 ## Pi notes
 
 - Real hardware mode is the default. It expects the RP2040 at I2C address `0x12` on bus `1`.
@@ -52,10 +66,11 @@ GPIO reads, ALSA device visibility, and pygame mixer initialization.
 - Mock mode is useful for browser/UI work before the Pi and RP2040 are wired together.
 - Audio uploads are stored under `uploads/audio/`.
 - Audio playback uses `pygame`, so install project requirements inside the same virtualenv you use to run `app.py`.
+- Set `OMB_AUDIO_DRIVER=alsa` and `OMB_AUDIO_DEVICE=<SDL device name>` to force pygame to a specific output device.
 - The GPIO monitor imports `RPi.GPIO`, and on current Raspberry Pi OS this is best provided by the `rpi-lgpio` compatibility package from `requirements.txt`.
 - If the GPIO panel says `No compatible GPIO library is installed in this Python environment`, activate the venv and run `pip install -r requirements.txt`.
 - GPIO inputs default to internal pull-ups (`OMB_GPIO_PULL=up`), which is usually what you want for a switch wired between the input and ground. Set `OMB_GPIO_PULL=down` for switches wired to 3.3V, or `OMB_GPIO_PULL=off` if you provide external bias resistors.
-- Logic and state polling runs every 100 ms.
+- Logic and state polling runs every 100 ms, but the background poll reads cached RP2040 state and fresh local GPIO only. RP2040 I2C reads happen on explicit refresh, health checks, and hardware commands.
 - Logic timer causes listen for named countdown timers that are started by timer actions. Timer names use only letters and numbers.
 - NeoPixel commands target RP2040 pixel rails `PIX_1` through `PIX_4`, each currently treated as 100 pixels.
 - MQTT node control is enabled by default and connects to `192.168.0.153:1883`.

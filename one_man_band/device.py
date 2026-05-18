@@ -323,6 +323,12 @@ class DeviceController:
             self._apply_servo_value_cache()
             return DeviceState(**asdict(self._state))
 
+    def read_cached_state(self, refresh_gpio: bool = True) -> DeviceState:
+        with self._lock:
+            if refresh_gpio:
+                self._state.gpio_inputs, self._state.gpio_error = self._read_gpio_inputs()
+            return DeviceState(**asdict(self._state))
+
     def _update_register(self, reg: int, value: int) -> DeviceState:
         with self._lock:
             overrides = dict(self._state.gpio_input_overrides or {})
@@ -424,7 +430,7 @@ class DeviceController:
         if name not in GPIO_INPUTS:
             raise ValueError(f"Unknown input pin: {name}")
         with self._lock:
-            state = self.read_state()
+            state = self.read_cached_state(refresh_gpio=True)
             current_override = None
             if state.gpio_input_overrides:
                 current_override = state.gpio_input_overrides.get(name)
@@ -446,7 +452,7 @@ class DeviceController:
         if name not in GPIO_INPUTS:
             raise ValueError(f"Unknown input pin: {name}")
         with self._lock:
-            state = self.read_state()
+            state = self.read_cached_state(refresh_gpio=True)
             overrides = dict(state.gpio_input_overrides or {})
             overrides.pop(name, None)
             self._state.gpio_input_overrides = overrides
@@ -454,7 +460,7 @@ class DeviceController:
 
     def clear_all_gpio_overrides(self) -> DeviceState:
         with self._lock:
-            state = self.read_state()
+            state = self.read_cached_state(refresh_gpio=True)
             self._state = DeviceState(**asdict(state))
             self._state.gpio_input_overrides = {}
             return DeviceState(**asdict(self._state))

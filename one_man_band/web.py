@@ -328,8 +328,11 @@ def _metadata() -> dict[str, object]:
     }
 
 
-def _combined_state(process_logic: bool = False) -> dict[str, object]:
-    device_state = controller.read_state().to_payload()
+def _combined_state(process_logic: bool = False, refresh_hardware: bool = False) -> dict[str, object]:
+    if refresh_hardware:
+        device_state = controller.read_state().to_payload()
+    else:
+        device_state = controller.read_cached_state(refresh_gpio=True).to_payload()
     if process_logic:
         logic_engine.process_state(device_state)
     return {
@@ -356,7 +359,7 @@ def create_app() -> Flask:
 
     @app.get("/api/state")
     def get_state():
-        return jsonify(_combined_state())
+        return jsonify(_combined_state(refresh_hardware=request.args.get("refresh") == "1"))
 
     @app.get("/api/health")
     def health():
@@ -488,6 +491,7 @@ def _poll_state_forever() -> None:
         socketio.sleep(STATE_POLL_SECONDS)
         if _shutdown_event.is_set():
             break
+        print("Polling state...")
         socketio.emit("state:update", _combined_state(process_logic=True))
 
 
@@ -545,7 +549,7 @@ def handle_connect():
 
 @socketio.on("state:refresh")
 def handle_refresh():
-    emit("state:update", _combined_state())
+    emit("state:update", _combined_state(refresh_hardware=True))
 
 
 @socketio.on("rail:toggle")
