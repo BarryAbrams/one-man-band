@@ -5,6 +5,18 @@ namespace {
 constexpr uint8_t kPiI2cAddress = 0x12;
 constexpr uint8_t kPiI2cSdaPin = 14;
 constexpr uint8_t kPiI2cSclPin = 15;
+constexpr uint8_t kPeripheralI2cSdaPin = 4;
+constexpr uint8_t kPeripheralI2cSclPin = 5;
+
+constexpr uint8_t k12vCEnablePin = 9;
+constexpr uint8_t k12vBEnablePin = 10;
+constexpr uint8_t k12vAEnablePin = 11;
+constexpr uint8_t k8vEnablePin = 12;
+
+constexpr uint8_t kTca9534Address = 0x20;
+constexpr uint8_t kTca9534OutputPortRegister = 0x01;
+constexpr uint8_t kTca9534PolarityRegister = 0x02;
+constexpr uint8_t kTca9534ConfigRegister = 0x03;
 
 constexpr uint8_t kRegisterRailState = 0x01;
 constexpr uint8_t kRegisterRelayState = 0x02;
@@ -25,6 +37,12 @@ constexpr uint8_t kPixelCommandSize =
 
 constexpr uint8_t kCommandQueueSize = 8;
 constexpr uint8_t kMaxCommandBytes = 16;
+
+struct RailOutput {
+  uint8_t mask = 0;
+  uint8_t pin = 0;
+  bool enabledLevel = HIGH;
+};
 
 struct I2cCommand {
   uint8_t size = 0;
@@ -60,12 +78,67 @@ struct ControllerState {
 
 ControllerState gState;
 uint8_t gPixelCommand[kPixelCommandSize] = {};
+bool gTca9534Ready = false;
+
+constexpr RailOutput kRailOutputs[] = {
+    {static_cast<uint8_t>(1u << 0), k12vAEnablePin, HIGH},
+    {static_cast<uint8_t>(1u << 1), k12vBEnablePin, HIGH},
+    {static_cast<uint8_t>(1u << 2), k12vCEnablePin, HIGH},
+    {static_cast<uint8_t>(1u << 3), k8vEnablePin, LOW},
+};
 
 volatile I2cCommand gCommandQueue[kCommandQueueSize];
 volatile uint8_t gCommandHead = 0;
 volatile uint8_t gCommandTail = 0;
 volatile uint32_t gQueuedCommandCount = 0;
 volatile uint32_t gDroppedCommandCount = 0;
+
+void writeRailOutput(const RailOutput& output, bool enabled) {
+  const uint8_t disabledLevel = output.enabledLevel == HIGH ? LOW : HIGH;
+  digitalWrite(output.pin, enabled ? output.enabledLevel : disabledLevel);
+}
+
+void configureRailOutputs() {
+  for (const RailOutput& output : kRailOutputs) {
+    pinMode(output.pin, OUTPUT);
+    writeRailOutput(output, false);
+  }
+}
+
+void applyRailOutputs(uint8_t railMask) {
+  for (const RailOutput& output : kRailOutputs) {
+    writeRailOutput(output, (railMask & output.mask) != 0);
+  }
+}
+
+bool writePeripheralRegister(uint8_t address, uint8_t registerAddress,
+                             uint8_t value) {
+  Wire.beginTransmission(address);
+  Wire.write(registerAddress);
+  Wire.write(value);
+  return Wire.endTransmission() == 0;
+}
+
+void initializeTca9534() {
+  const bool outputOk =
+      writePeripheralRegister(kTca9534Address, kTca9534OutputPortRegister, 0x00);
+  const bool polarityOk =
+      writePeripheralRegister(kTca9534Address, kTca9534PolarityRegister, 0x00);
+  const bool configOk =
+      writePeripheralRegister(kTca9534Address, kTca9534ConfigRegister, 0x00);
+
+  gTca9534Ready = outputOk && polarityOk && configOk;
+  Serial.print("TCA9534 init: ");
+  Serial.println(gTca9534Ready ? "ok" : "FAILED");
+}
+
+bool applyRelayOutputs(uint8_t relayMask) {
+  if (!gTca9534Ready) {
+    return false;
+  }
+  return writePeripheralRegister(kTca9534Address, kTca9534OutputPortRegister,
+                                 relayMask & kRelayMask);
+}
 
 bool queueIsFull() {
   const uint8_t nextHead =
@@ -168,12 +241,16 @@ bool applyRegisterWrite(uint8_t registerAddress, const uint8_t* values,
       const uint8_t nextRailMask = values[0] & kRailMask;
       const bool changed = gState.railMask != nextRailMask;
       gState.railMask = nextRailMask;
+      applyRailOutputs(gState.railMask);
       return changed;
     }
     case kRegisterRelayState: {
       const uint8_t nextRelayMask = values[0] & kRelayMask;
       const bool changed = gState.relayMask != nextRelayMask;
       gState.relayMask = nextRelayMask;
+      if (!applyRelayOutputs(gState.relayMask)) {
+        Serial.println("TCA9534 write FAILED while applying relay state");
+      }
       return changed;
     }
     case kRegisterServoEnableMask: {
@@ -223,6 +300,9 @@ bool processCommand(const I2cCommand& command) {
     const uint8_t nextRelayMask = command.bytes[0] & kRelayMask;
     const bool changed = gState.relayMask != nextRelayMask;
     gState.relayMask = nextRelayMask;
+    if (!applyRelayOutputs(gState.relayMask)) {
+      Serial.println("TCA9534 write FAILED while applying relay state");
+    }
     return changed;
   }
 
@@ -276,6 +356,15 @@ void printStateSummary() {
 void setup() {
   Serial.begin(115200);
   delay(500);
+
+  configureRailOutputs();
+  applyRailOutputs(gState.railMask);
+
+  Wire.setSDA(kPeripheralI2cSdaPin);
+  Wire.setSCL(kPeripheralI2cSclPin);
+  Wire.begin();
+  initializeTca9534();
+  applyRelayOutputs(gState.relayMask);
 
   Wire1.setSDA(kPiI2cSdaPin);
   Wire1.setSCL(kPiI2cSclPin);
