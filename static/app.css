@@ -48,6 +48,14 @@ body {
   align-items: start;
 }
 
+.hero-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .split {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -1034,6 +1042,10 @@ button:hover {
   .panel-header {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .hero-actions {
+    justify-content: flex-start;
   }
 
   .tab-bar {

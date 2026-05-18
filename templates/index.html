@@ -18,6 +18,10 @@
             Authoring and monitoring surface for the OMB, where inputs, outputs, motion, media, and future logic work together.
           </p>
         </div>
+        <div class="hero-actions">
+          <span class="badge" :class="state.connected ? 'ok' : 'error'" x-text="state.connected ? 'Connected' : 'Disconnected'"></span>
+          <button class="secondary" @click="refresh()">Refresh Status</button>
+        </div>
       </section>
 
       <section class="tab-bar" aria-label="Primary navigation">
