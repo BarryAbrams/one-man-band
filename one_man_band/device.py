@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from dataclasses import asdict, dataclass
 from typing import Callable, Final
-import time
 
 try:
     from smbus2 import SMBus
@@ -32,6 +32,10 @@ REG_INA0_CURRENT_L: Final[int] = 0x22
 REG_INA1_VOLTAGE_L: Final[int] = 0x24
 REG_INA1_CURRENT_L: Final[int] = 0x26
 REG_PIXEL_COMMAND: Final[int] = 0x40
+REG_STATUS_SNAPSHOT: Final[int] = 0x60
+STATUS_SNAPSHOT_LENGTH: Final[int] = 24
+STATUS_SNAPSHOT_VERSION: Final[int] = 2
+STATUS_SNAPSHOT_CHECKSUM_INDEX: Final[int] = STATUS_SNAPSHOT_LENGTH - 1
 
 PIXEL_ANIMATION_FADE: Final[int] = 0
 PIXEL_ANIMATION_CANDLE_FLICKER: Final[int] = 1
@@ -124,6 +128,7 @@ class DeviceState:
     connected: bool = False
     error: str = ""
     backend: str = "disconnected"
+    status_source: str = "unknown"
     gpio_inputs: dict[str, bool] | None = None
     gpio_input_overrides: dict[str, bool] | None = None
     gpio_error: str = ""
@@ -184,6 +189,7 @@ class DeviceController:
             ina_presence=0b11 if self._mock_mode else 0,
             connected=self._mock_mode,
             backend="mock" if self._mock_mode else "i2c",
+            status_source="mock" if self._mock_mode else "unknown",
             servo_values=[127 for _ in SERVO_CHANNELS],
             ina_voltage_mv={"12V_C": 0, "8V": 8000},
             ina_current_ma={"12V_C": 0, "8V": 0},
@@ -256,6 +262,9 @@ class DeviceController:
     def _write_block(self, bus: SMBus, reg: int, values: list[int]) -> None:
         bus.write_i2c_block_data(DEVICE, reg, [value & 0xFF for value in values])
 
+    def _read_block(self, bus: SMBus, reg: int, length: int) -> list[int]:
+        return [value & 0xFF for value in bus.read_i2c_block_data(DEVICE, reg, length)]
+
     def _read_u16_le(self, bus: SMBus, reg_low: int) -> int:
         low = self._read_reg(bus, reg_low)
         high = self._read_reg(bus, reg_low + 1)
@@ -266,6 +275,62 @@ class DeviceController:
         if value & 0x8000:
             value -= 0x10000
         return value
+
+    def _u16_from_snapshot(self, data: list[int], offset: int) -> int:
+        return data[offset] | (data[offset + 1] << 8)
+
+    def _i16_from_snapshot(self, data: list[int], offset: int) -> int:
+        value = self._u16_from_snapshot(data, offset)
+        if value & 0x8000:
+            value -= 0x10000
+        return value
+
+    def _snapshot_checksum(self, data: list[int]) -> int:
+        return sum(data[:STATUS_SNAPSHOT_CHECKSUM_INDEX]) & 0xFF
+
+    def _read_snapshot_state(
+        self,
+        bus: SMBus,
+        gpio_inputs: dict[str, bool],
+        gpio_error: str,
+    ) -> DeviceState:
+        data = self._read_block(bus, REG_STATUS_SNAPSHOT, STATUS_SNAPSHOT_LENGTH)
+        if len(data) != STATUS_SNAPSHOT_LENGTH:
+            raise OSError(
+                f"Invalid RP2040 snapshot length: expected {STATUS_SNAPSHOT_LENGTH}, got {len(data)}"
+            )
+        if data[0] != STATUS_SNAPSHOT_VERSION:
+            raise OSError(f"Unsupported RP2040 snapshot version: {data[0]}")
+        expected_checksum = self._snapshot_checksum(data)
+        actual_checksum = data[STATUS_SNAPSHOT_CHECKSUM_INDEX]
+        if actual_checksum != expected_checksum:
+            raise OSError(
+                f"Invalid RP2040 snapshot checksum: expected 0x{expected_checksum:02x}, got 0x{actual_checksum:02x}"
+            )
+
+        return DeviceState(
+            version=data[0],
+            rails=data[2],
+            solenoids=data[3],
+            alarms=data[4],
+            ina_presence=data[5],
+            servo_enable_mask=data[6],
+            servo_values=data[7:15],
+            ina_voltage_mv={
+                "12V_C": self._u16_from_snapshot(data, 15),
+                "8V": self._u16_from_snapshot(data, 19),
+            },
+            ina_current_ma={
+                "12V_C": self._i16_from_snapshot(data, 17),
+                "8V": self._i16_from_snapshot(data, 21),
+            },
+            connected=True,
+            error="",
+            backend="i2c",
+            status_source="i2c_snapshot",
+            gpio_inputs=gpio_inputs,
+            gpio_error=gpio_error,
+        )
 
     def _read_from_bus(self) -> DeviceState:
         gpio_inputs, gpio_error = self._read_gpio_inputs()
@@ -281,6 +346,11 @@ class DeviceController:
 
         try:
             with SMBus(I2C_BUS) as bus:
+                try:
+                    return self._read_snapshot_state(bus, gpio_inputs, gpio_error)
+                except OSError:
+                    pass
+
                 servo_values = [
                     self._read_reg(bus, REG_SERVO_BASE + channel) for channel in SERVO_CHANNELS
                 ]
@@ -305,6 +375,7 @@ class DeviceController:
                     connected=True,
                     error="",
                     backend="i2c",
+                    status_source="i2c_registers",
                     gpio_inputs=gpio_inputs,
                     gpio_error=gpio_error,
                 )
@@ -324,6 +395,7 @@ class DeviceController:
             if self._mock_mode:
                 self._state.connected = True
                 self._state.backend = "mock"
+                self._state.status_source = "mock"
                 self._state.gpio_inputs, self._state.gpio_error = self._read_gpio_inputs()
                 self._state.gpio_input_overrides = overrides
                 self._state.pixel_command = pixel_command
@@ -360,6 +432,7 @@ class DeviceController:
                     self._servo_value_cache[reg - REG_SERVO_BASE] = value & 0xFF
                 self._state.connected = True
                 self._state.error = ""
+                self._state.status_source = "mock"
                 self._state.gpio_inputs, self._state.gpio_error = self._read_gpio_inputs()
                 self._state.gpio_input_overrides = overrides
                 self._state.pixel_command = pixel_command

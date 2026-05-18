@@ -94,6 +94,7 @@ The register map used by this app is:
 - `0x10` to `0x17`: servo values for channels `0` to `7`, read/write
 - `0x20` to `0x27`: INA260 telemetry, read only
 - `0x40` to `0x4C`: NeoPixel animation command block, write/read
+- `0x60` to `0x77`: atomic status snapshot block, read only
 
 NeoPixel command registers:
 
@@ -111,6 +112,24 @@ Animation IDs:
 - `0`: color fade from start/base RGB to end RGB. Duration `0` applies the end color immediately.
 - `1`: persistent candle flicker. Base RGB is in `0x43` to `0x45`, hue variation is `0x46`, seed is `0x47`, and target intensity is `0x48`. Duration is the ramp time from current intensity to target intensity; duration `0` jumps immediately. Candle flicker runs until another pixel command replaces it.
 - `2`: lightning strike. Base RGB is restored after the strike, flash RGB is in `0x46` to `0x48`, and duration `0` uses the firmware default `850 ms`.
+
+Status snapshot block:
+
+- Python first tries to read 24 bytes from register `0x60` using one I2C block read. If that snapshot is not available, it falls back to the older per-register reads.
+- Firmware should copy live state into a stable 24-byte buffer before serving the snapshot so all bytes come from one coherent moment.
+- Byte `0`: protocol version, currently `2`
+- Byte `1`: snapshot sequence counter, incremented whenever the snapshot buffer is rebuilt
+- Byte `2`: rail state
+- Byte `3`: solenoid state
+- Byte `4`: alarm state
+- Byte `5`: INA260 presence bits
+- Byte `6`: servo enable mask
+- Bytes `7` to `14`: servo values for channels `0` to `7`
+- Bytes `15` / `16`: INA0 voltage in little-endian millivolts
+- Bytes `17` / `18`: INA0 current in little-endian signed milliamps
+- Bytes `19` / `20`: INA1 voltage in little-endian millivolts
+- Bytes `21` / `22`: INA1 current in little-endian signed milliamps
+- Byte `23`: checksum, `sum(bytes 0 through 22) & 0xFF`
 
 Boot defaults from the RP2040 are `12V_B` enabled, `8V` enabled, all solenoids off, and all servos disabled.
 

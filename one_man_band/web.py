@@ -496,6 +496,7 @@ def _state_update_log_line(source: str, payload: dict[str, object]) -> str:
         f"[state:update] source={source} "
         f"connected={payload.get('connected')} "
         f"backend={payload.get('backend')} "
+        f"status_source={payload.get('status_source')} "
         f"version={payload.get('version')} "
         f"rails=0x{rails:02x}/0b{rails:08b} {payload.get('rails_map')} "
         f"solenoids=0x{solenoids:02x}/0b{solenoids:08b} {payload.get('solenoids_map')} "
