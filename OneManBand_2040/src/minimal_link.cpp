@@ -48,6 +48,7 @@ constexpr unsigned long kCandleFlickerFrameMs = 45;
 constexpr unsigned long kRailReassertMs = 250;
 
 constexpr uint8_t kCommandQueueSize = 32;
+constexpr uint8_t kRelayQueueSize = 32;
 constexpr uint8_t kMaxCommandBytes = 16;
 
 struct RailOutput {
@@ -129,8 +130,10 @@ volatile uint32_t gQueuedCommandCount = 0;
 volatile uint32_t gDroppedCommandCount = 0;
 volatile uint8_t gLastRegisterPointer = kRegisterStatusSnapshot;
 volatile uint8_t gStatusSnapshot[kStatusSnapshotLength] = {};
-volatile bool gPendingRelayCommand = false;
-volatile uint8_t gPendingRelayMask = 0;
+volatile uint8_t gRelayQueue[kRelayQueueSize] = {};
+volatile uint8_t gRelayHead = 0;
+volatile uint8_t gRelayTail = 0;
+volatile uint32_t gDroppedRelayCount = 0;
 
 void printBinaryNibble(uint8_t value);
 
@@ -428,6 +431,22 @@ bool queueIsFull() {
   return nextHead == gCommandTail;
 }
 
+bool relayQueueIsFull() {
+  const uint8_t nextHead =
+      static_cast<uint8_t>((gRelayHead + 1) % kRelayQueueSize);
+  return nextHead == gRelayTail;
+}
+
+void pushRelayCommand(uint8_t relayMask) {
+  if (relayQueueIsFull()) {
+    ++gDroppedRelayCount;
+    return;
+  }
+
+  gRelayQueue[gRelayHead] = relayMask & kRelayMask;
+  gRelayHead = static_cast<uint8_t>((gRelayHead + 1) % kRelayQueueSize);
+}
+
 void receiveEvent(int byteCount) {
   if (byteCount <= 0) {
     return;
@@ -454,8 +473,7 @@ void receiveEvent(int byteCount) {
   }
 
   if (size >= 2 && bytes[0] == kRegisterRelayState) {
-    gPendingRelayMask = bytes[1] & kRelayMask;
-    gPendingRelayCommand = true;
+    pushRelayCommand(bytes[1]);
     ++gQueuedCommandCount;
     return;
   }
@@ -503,6 +521,19 @@ bool popCommand(I2cCommand& command) {
     command.bytes[index] = gCommandQueue[gCommandTail].bytes[index];
   }
   gCommandTail = static_cast<uint8_t>((gCommandTail + 1) % kCommandQueueSize);
+  interrupts();
+  return true;
+}
+
+bool popRelayCommand(uint8_t& relayMask) {
+  noInterrupts();
+  if (gRelayHead == gRelayTail) {
+    interrupts();
+    return false;
+  }
+
+  relayMask = gRelayQueue[gRelayTail];
+  gRelayTail = static_cast<uint8_t>((gRelayTail + 1) % kRelayQueueSize);
   interrupts();
   return true;
 }
@@ -655,22 +686,21 @@ bool processCommand(const I2cCommand& command) {
                             command.size - 1);
 }
 
-bool applyPendingRelayCommand() {
-  noInterrupts();
-  const bool pending = gPendingRelayCommand;
-  const uint8_t relayMask = gPendingRelayMask;
-  gPendingRelayCommand = false;
-  interrupts();
-
-  if (!pending) {
-    return false;
-  }
-
+bool applyRelayCommand(uint8_t relayMask) {
   ++gState.receivedCommandCount;
   const bool changed = gState.relayMask != relayMask;
   gState.relayMask = relayMask;
   if (!applyRelayOutputs(gState.relayMask)) {
     Serial.println("TCA9534 write FAILED while applying relay state");
+  }
+  return changed;
+}
+
+bool applyQueuedRelayCommands() {
+  bool changed = false;
+  uint8_t relayMask = 0;
+  while (popRelayCommand(relayMask)) {
+    changed = applyRelayCommand(relayMask) || changed;
   }
   return changed;
 }
@@ -687,8 +717,11 @@ void printStateSummary() {
   Serial.print(" dropped=");
   noInterrupts();
   const uint32_t dropped = gDroppedCommandCount;
+  const uint32_t droppedRelays = gDroppedRelayCount;
   interrupts();
   Serial.print(dropped);
+  Serial.print(" relay_dropped=");
+  Serial.print(droppedRelays);
 
   Serial.print(" rails=0b");
   printBinaryNibble(gState.railMask);
@@ -711,7 +744,6 @@ void printStateSummary() {
 
 void setup() {
   Serial.begin(115200);
-  delay(500);
 
   configureRailOutputs();
   forceRailsEnabled();
@@ -748,19 +780,19 @@ void loop() {
     gLastRailReassertMs = now;
   }
 
-  bool changed = applyPendingRelayCommand();
+  bool changed = applyQueuedRelayCommands();
 
   I2cCommand command;
   while (popCommand(command)) {
     changed = processCommand(command) || changed;
   }
 
+  changed = applyQueuedRelayCommands() || changed;
   changed = updatePixelAnimations() || changed;
+  changed = applyQueuedRelayCommands() || changed;
 
   if (changed) {
     rebuildStatusSnapshot();
     printStateSummary();
   }
-
-  delay(1);
 }
