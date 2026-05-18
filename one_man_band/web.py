@@ -556,6 +556,7 @@ def handle_rail_toggle(payload: dict[str, str]):
     try:
         state = controller.toggle_rail(payload["name"])
         emit("state:update", state.to_payload(), broadcast=True)
+        print(f"Toggled rail {payload['name']}")
     except (KeyError, ValueError) as exc:
         emit("server:error", {"message": str(exc)})
 
