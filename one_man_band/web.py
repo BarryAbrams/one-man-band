@@ -15,6 +15,7 @@ from .audio import AudioManager
 from .device import DeviceController
 from .logic import LogicEngine, LogicStore, publish_dmx_fade_payload
 from .node_control import NodeControlMqttClient
+from .rfid import RfidCatalog
 
 
 socketio = SocketIO(async_mode="threading", cors_allowed_origins="*")
@@ -23,12 +24,26 @@ base_dir = Path(__file__).resolve().parent.parent
 audio_manager = AudioManager(base_dir)
 logic_store = LogicStore(base_dir / "data" / "logic.sqlite3")
 animation_store = AnimationStore(base_dir / "data" / "animations.sqlite3")
+rfid_catalog = RfidCatalog(base_dir / "data" / "rfid.sqlite3")
 _poller_started = False
 _shutdown_event = threading.Event()
 STATE_POLL_SECONDS = 0.1
 GPIO_POLL_SECONDS = 0.05
-AMBIENT_LIGHT_POLL_SECONDS = 1.0
-NODE_TITLE = os.environ.get("OMB_NODE_TITLE", "Overworld Bar")
+TINYRFID_POLL_SECONDS = 0.1
+NODE_TITLE = os.environ.get("OMB_NODE_TITLE", "Overworld Squeakeasy")
+FOG_TEST_PULSE_ENABLED = os.environ.get("OMB_FOG_TEST_PULSE_ENABLED", "0") == "1"
+FOG_TEST_PULSE_RELAY = os.environ.get("OMB_FOG_TEST_PULSE_RELAY", "P3")
+FOG_TEST_PULSE_INTERVAL_SECONDS = float(
+    os.environ.get("OMB_FOG_TEST_PULSE_INTERVAL_SECONDS", "60")
+)
+FOG_TEST_PULSE_DURATION_SECONDS = float(
+    os.environ.get("OMB_FOG_TEST_PULSE_DURATION_SECONDS", "1")
+)
+_fog_relay_events_lock = threading.RLock()
+_fog_relay_events: list[dict[str, float | str]] = []
+_rfid_scan_history_lock = threading.RLock()
+_rfid_scan_history: list[dict[str, object]] = []
+_rfid_last_scan_count = -1
 
 
 class AnimationRunner:
@@ -88,6 +103,10 @@ class AnimationRunner:
         finish_timer.start()
         active["timers"].append(finish_timer)
         self._on_update()
+
+    def is_active(self) -> bool:
+        with self._lock:
+            return bool(self._active)
 
     def stop(self, name: str) -> None:
         with self._lock:
@@ -327,14 +346,101 @@ def _metadata() -> dict[str, object]:
         **logic_engine.metadata(),
         "node_title": NODE_TITLE,
         "audio_extensions": [".wav", ".mp3", ".ogg"],
+        "rfid_catalog": rfid_catalog.payload(),
     }
 
+
+def _fog_relay_events_payload() -> list[dict[str, float | str]]:
+    now = time.monotonic()
+    cutoff = now - 30 * 60
+    with _fog_relay_events_lock:
+        while _fog_relay_events and float(_fog_relay_events[0]["monotonic_at"]) < cutoff:
+            _fog_relay_events.pop(0)
+        return [
+            {
+                "age_ms": max(0.0, (now - float(event["monotonic_at"])) * 1000),
+                "at": float(event["wall_at_ms"]),
+                "relay": str(event["relay"]),
+                "source": str(event["source"]),
+            }
+            for event in _fog_relay_events
+        ]
+
+
+def _enriched_state(payload: dict[str, object]) -> dict[str, object]:
+    return {
+        **rfid_catalog.enrich_state(payload),
+        "fog_relay_events": _fog_relay_events_payload(),
+        "tinyrfid_scan_history": _rfid_scan_history_payload(),
+    }
+
+
+def _rfid_scan_history_payload() -> list[dict[str, object]]:
+    with _rfid_scan_history_lock:
+        scans = list(_rfid_scan_history)
+    payload: list[dict[str, object]] = []
+    for index, scan in enumerate(scans):
+        uid = str(scan.get("uid") or "")
+        try:
+            tag = rfid_catalog.get_tag(uid) if uid else None
+        except ValueError:
+            tag = None
+        payload.append(
+            {
+                **scan,
+                "known": bool(tag and tag.enabled),
+                "label": tag.label if tag else "",
+                "groups": tag.groups if tag and tag.enabled else [],
+                "is_latest": index == 0,
+            }
+        )
+    return payload
+
+
+def _record_rfid_scan(payload: dict[str, object]) -> None:
+    global _rfid_last_scan_count
+    uid = str(payload.get("tinyrfid_uid") or "").strip()
+    scan_count = int(payload.get("tinyrfid_scan_count") or 0)
+    if not uid or scan_count <= 0 or scan_count == _rfid_last_scan_count:
+        return
+    now = time.time() * 1000
+    with _rfid_scan_history_lock:
+        _rfid_last_scan_count = scan_count
+        _rfid_scan_history[:] = [
+            scan for scan in _rfid_scan_history if str(scan.get("uid") or "").strip() != uid
+        ]
+        _rfid_scan_history.insert(
+            0,
+            {
+                "uid": uid,
+                "scan_count": scan_count,
+                "at": now,
+            },
+        )
+        del _rfid_scan_history[20:]
+
+
+def _record_fog_relay_event(source: str) -> None:
+    now = time.monotonic()
+    cutoff = now - 30 * 60
+    with _fog_relay_events_lock:
+        while _fog_relay_events and float(_fog_relay_events[0]["monotonic_at"]) < cutoff:
+            _fog_relay_events.pop(0)
+        _fog_relay_events.append(
+            {
+                "monotonic_at": now,
+                "wall_at_ms": time.time() * 1000,
+                "relay": FOG_TEST_PULSE_RELAY,
+                "source": source,
+            }
+        )
 
 def _combined_state(process_logic: bool = False, refresh_hardware: bool = False) -> dict[str, object]:
     if refresh_hardware:
         device_state = controller.read_state().to_payload()
     else:
         device_state = controller.read_cached_state(refresh_gpio=True).to_payload()
+    device_state = rfid_catalog.enrich_state(device_state)
     if process_logic:
         logic_engine.process_state(device_state)
     return {
@@ -343,6 +449,8 @@ def _combined_state(process_logic: bool = False, refresh_hardware: bool = False)
         "logic_timers": logic_engine.timers_payload(),
         "logic_action_events": logic_engine.action_events_payload(),
         "node_control": node_control.payload(),
+        "fog_relay_events": _fog_relay_events_payload(),
+        "tinyrfid_scan_history": _rfid_scan_history_payload(),
     }
 
 
@@ -361,7 +469,9 @@ def create_app() -> Flask:
 
     @app.get("/api/state")
     def get_state():
-        return jsonify(_combined_state(refresh_hardware=request.args.get("refresh") == "1"))
+        refresh_arg = request.args.get("refresh")
+        refresh_hardware = refresh_arg != "0"
+        return jsonify(_combined_state(refresh_hardware=refresh_hardware))
 
     @app.get("/api/health")
     def health():
@@ -394,6 +504,53 @@ def create_app() -> Flask:
     @app.get("/api/animations")
     def animations_list():
         return jsonify({"animations": [animation.to_payload() for animation in animation_store.list_animations()]})
+
+    @app.get("/api/rfid")
+    def rfid_catalog_get():
+        return jsonify(rfid_catalog.payload())
+
+    @app.post("/api/rfid/tags")
+    def rfid_tag_upsert():
+        try:
+            tag = rfid_catalog.upsert_tag(request.get_json(force=True) or {})
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        payload = {"ok": True, "tag": tag.to_payload(), "catalog": rfid_catalog.payload()}
+        socketio.emit("rfid:catalog", payload["catalog"])
+        _broadcast_state()
+        return jsonify(payload)
+
+    @app.delete("/api/rfid/tags/<path:uid>")
+    def rfid_tag_delete(uid: str):
+        try:
+            rfid_catalog.delete_tag(uid)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        catalog = rfid_catalog.payload()
+        socketio.emit("rfid:catalog", catalog)
+        _broadcast_state()
+        return jsonify({"ok": True, "catalog": catalog})
+
+    @app.post("/api/rfid/groups")
+    def rfid_group_upsert():
+        try:
+            group = rfid_catalog.upsert_group(request.get_json(force=True) or {})
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        payload = {"ok": True, "group": group.to_payload(), "catalog": rfid_catalog.payload()}
+        socketio.emit("rfid:catalog", payload["catalog"])
+        return jsonify(payload)
+
+    @app.delete("/api/rfid/groups/<path:name>")
+    def rfid_group_delete(name: str):
+        try:
+            rfid_catalog.delete_group(name)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        catalog = rfid_catalog.payload()
+        socketio.emit("rfid:catalog", catalog)
+        _broadcast_state()
+        return jsonify({"ok": True, "catalog": catalog})
 
     @app.post("/api/animations")
     def animations_create():
@@ -507,10 +664,13 @@ def _state_update_log_line(source: str, payload: dict[str, object]) -> str:
         f"gpio={payload.get('gpio_inputs_map')} "
         f"gpio_physical={payload.get('gpio_physical_map')} "
         f"gpio_overrides={payload.get('gpio_override_map')} "
-        f"ambient_lux={payload.get('ambient_light_lux')} "
-        f"ambient_raw={payload.get('ambient_light_raw')} "
-        f"ambient_state={payload.get('ambient_light_state')} "
-        f"ambient_error={payload.get('ambient_light_error') or ''} "
+        f"tinyrfid_connected={payload.get('tinyrfid_connected')} "
+        f"tinyrfid_tag={payload.get('tinyrfid_tag_present')} "
+        f"tinyrfid_uid={payload.get('tinyrfid_uid') or ''} "
+        f"tinyrfid_known={payload.get('tinyrfid_tag_known')} "
+        f"tinyrfid_groups={payload.get('tinyrfid_groups')} "
+        f"tinyrfid_scans={payload.get('tinyrfid_scan_count')} "
+        f"tinyrfid_error={payload.get('tinyrfid_error') or ''} "
         f"pixel={payload.get('pixel_command')} "
         f"error={payload.get('error') or ''} "
         f"gpio_error={payload.get('gpio_error') or ''}"
@@ -522,6 +682,7 @@ def _log_state_update(source: str, payload: dict[str, object]) -> None:
 
 
 def _socketio_emit_state_update(payload: dict[str, object], source: str) -> None:
+    payload = _enriched_state(payload)
     _log_state_update(source, payload)
     socketio.emit("state:update", payload)
 
@@ -531,6 +692,7 @@ def _emit_state_update(
     source: str,
     broadcast: bool = False,
 ) -> None:
+    payload = _enriched_state(payload)
     _log_state_update(source, payload)
     emit("state:update", payload, broadcast=broadcast)
 
@@ -580,12 +742,14 @@ def _gpio_state_signature(payload: dict[str, object]) -> tuple[object, ...]:
     )
 
 
-def _ambient_light_signature(payload: dict[str, object]) -> tuple[object, ...]:
+def _tiny_rfid_signature(payload: dict[str, object]) -> tuple[object, ...]:
     return (
-        payload.get("ambient_light_state") or "unknown",
-        payload.get("ambient_light_lux"),
-        payload.get("ambient_light_raw"),
-        payload.get("ambient_light_error") or "",
+        bool(payload.get("tinyrfid_connected")),
+        bool(payload.get("tinyrfid_tag_present")),
+        payload.get("tinyrfid_uid") or "",
+        tuple(payload.get("tinyrfid_groups") or []),
+        int(payload.get("tinyrfid_scan_count") or 0),
+        payload.get("tinyrfid_error") or "",
     )
 
 
@@ -605,27 +769,86 @@ def _poll_gpio_forever() -> None:
             _socketio_emit_state_update(payload, "gpio_poll")
 
 
-def _poll_ambient_light_forever() -> None:
+def _poll_tiny_rfid_forever() -> None:
     previous_signature: tuple[object, ...] | None = None
     while not _shutdown_event.is_set():
-        socketio.sleep(AMBIENT_LIGHT_POLL_SECONDS)
+        socketio.sleep(TINYRFID_POLL_SECONDS)
         if _shutdown_event.is_set():
             break
-        state = controller.refresh_ambient_light()
-        payload = {
+        state = controller.refresh_tiny_rfid()
+        payload = _enriched_state({
             **state.to_payload(),
             "audio_status": audio_manager.status().to_payload(),
             "logic_timers": logic_engine.timers_payload(),
             "logic_action_events": logic_engine.action_events_payload(),
             "node_control": node_control.payload(),
-        }
+        })
+        _record_rfid_scan(payload)
+        payload["tinyrfid_scan_history"] = _rfid_scan_history_payload()
         logic_engine.process_state(payload)
         payload["logic_timers"] = logic_engine.timers_payload()
         payload["logic_action_events"] = logic_engine.action_events_payload()
-        signature = _ambient_light_signature(payload)
+        signature = _tiny_rfid_signature(payload)
+        if previous_signature is None:
+            previous_signature = signature
+            _socketio_emit_state_update(payload, "tinyrfid_poll")
+            continue
         if signature != previous_signature:
             previous_signature = signature
-            _socketio_emit_state_update(payload, "ambient_light_poll")
+            _socketio_emit_state_update(payload, "tinyrfid_poll")
+
+
+def _fog_test_pulse_forever() -> None:
+    interval = max(1.0, FOG_TEST_PULSE_INTERVAL_SECONDS)
+    duration = max(0.05, min(FOG_TEST_PULSE_DURATION_SECONDS, interval))
+    next_pulse_at = time.monotonic()
+    while not _shutdown_event.is_set():
+        wait_seconds = max(0.0, next_pulse_at - time.monotonic())
+        if _shutdown_event.wait(wait_seconds):
+            break
+        if animation_runner.is_active() or logic_engine.is_busy():
+            print("Fog test pulse skipped: animation or logic is active", flush=True)
+            next_pulse_at += interval
+            if next_pulse_at < time.monotonic():
+                next_pulse_at = time.monotonic() + interval
+            continue
+        try:
+            try:
+                state = controller.set_solenoid(FOG_TEST_PULSE_RELAY, True)
+                _record_fog_relay_event("fog_test_pulse")
+                _socketio_emit_state_update(
+                    {
+                        **state.to_payload(),
+                        "audio_status": audio_manager.status().to_payload(),
+                        "logic_timers": logic_engine.timers_payload(),
+                        "logic_action_events": logic_engine.action_events_payload(),
+                        "node_control": node_control.payload(),
+                    },
+                    "fog_test_pulse_on",
+                )
+                if _shutdown_event.wait(duration):
+                    break
+            finally:
+                state = controller.set_solenoid(FOG_TEST_PULSE_RELAY, False)
+                _socketio_emit_state_update(
+                    {
+                        **state.to_payload(),
+                        "audio_status": audio_manager.status().to_payload(),
+                        "logic_timers": logic_engine.timers_payload(),
+                        "logic_action_events": logic_engine.action_events_payload(),
+                        "node_control": node_control.payload(),
+                    },
+                    "fog_test_pulse_off",
+                )
+        except Exception as exc:
+            print(f"Fog test pulse failed: {exc}", flush=True)
+            try:
+                controller.set_solenoid(FOG_TEST_PULSE_RELAY, False)
+            except Exception as off_exc:
+                print(f"Fog test pulse off failed: {off_exc}", flush=True)
+        next_pulse_at += interval
+        if next_pulse_at < time.monotonic():
+            next_pulse_at = time.monotonic() + interval
 
 
 def shutdown() -> None:
@@ -669,7 +892,9 @@ def create_socketio(app: Flask) -> SocketIO:
         logic_engine.run_boot_rules()
         node_control.start()
         socketio.start_background_task(_poll_gpio_forever)
-        socketio.start_background_task(_poll_ambient_light_forever)
+        socketio.start_background_task(_poll_tiny_rfid_forever)
+        if FOG_TEST_PULSE_ENABLED:
+            socketio.start_background_task(_fog_test_pulse_forever)
         # socketio.start_background_task(_poll_state_forever)
         _poller_started = True
 
@@ -679,7 +904,7 @@ def create_socketio(app: Flask) -> SocketIO:
 @socketio.on("connect")
 def handle_connect():
     emit("meta:init", _metadata())
-    _emit_state_update(_combined_state(), "connect")
+    _emit_state_update(_combined_state(refresh_hardware=True), "connect")
 
 
 @socketio.on("state:refresh")
@@ -691,6 +916,8 @@ def handle_refresh():
 def handle_solenoid_toggle(payload: dict[str, str]):
     try:
         state = controller.toggle_solenoid(payload["name"])
+        if payload["name"] == FOG_TEST_PULSE_RELAY and state.to_payload()["solenoids_map"].get(payload["name"]):
+            _record_fog_relay_event("manual_toggle")
         _emit_state_without_i2c_write(state)
     except (KeyError, ValueError) as exc:
         emit("server:error", {"message": str(exc)})
@@ -700,6 +927,8 @@ def handle_solenoid_toggle(payload: dict[str, str]):
 def handle_solenoid_set(payload: dict[str, object]):
     try:
         state = controller.set_solenoid(str(payload["name"]), bool(payload["enabled"]))
+        if str(payload["name"]) == FOG_TEST_PULSE_RELAY and bool(payload["enabled"]):
+            _record_fog_relay_event("manual_set")
         _emit_state_without_i2c_write(state)
     except (KeyError, TypeError, ValueError) as exc:
         emit("server:error", {"message": str(exc)})
@@ -847,10 +1076,22 @@ def handle_audio_resume():
     emit("audio:update", {"status": status.to_payload(), "tracks": audio_manager.list_tracks()}, broadcast=True)
 
 
+@socketio.on("audio:speaker_test")
+def handle_audio_speaker_test(payload: dict[str, object]):
+    try:
+        status = audio_manager.speaker_test(str(payload.get("speaker", "both")))
+        emit("audio:update", {"status": status.to_payload(), "tracks": audio_manager.list_tracks()}, broadcast=True)
+    except (TypeError, ValueError) as exc:
+        emit("server:error", {"message": str(exc)})
+
+
 @socketio.on("audio:set_volume")
 def handle_audio_set_volume(payload: dict[str, object]):
     try:
-        status = audio_manager.set_volume(float(payload["volume"]))
+        status = audio_manager.set_volume(
+            float(payload["volume"]),
+            str(payload.get("channel", "master")),
+        )
         emit("audio:update", {"status": status.to_payload(), "tracks": audio_manager.list_tracks()}, broadcast=True)
     except (KeyError, TypeError, ValueError) as exc:
         emit("server:error", {"message": str(exc)})

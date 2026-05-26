@@ -19,17 +19,17 @@ except ImportError:  # pragma: no cover - depends on target hardware
 
 I2C_BUS: Final[int] = 1
 DEVICE: Final[int] = 0x12
-BH1750_ADDRESS: Final[int] = 0x23
-BH1750_POWER_ON: Final[int] = 0x01
-BH1750_RESET: Final[int] = 0x07
-BH1750_ONE_TIME_HIGH_RES_MODE: Final[int] = 0x20
-BH1750_MEASUREMENT_SECONDS: Final[float] = 0.18
-BH1750_UPDATE_SECONDS: Final[float] = 1.0
-BH1750_DEFAULT_THRESHOLD_LUX: Final[float] = 200.0
+TINYRFID_ADDRESS: Final[int] = 0x13
+TINYRFID_STATUS_REGISTER: Final[int] = 0x00
+TINYRFID_STATUS_LENGTH: Final[int] = 16
+TINYRFID_STATUS_MAGIC: Final[int] = 0xA7
+TINYRFID_STATUS_VERSION: Final[int] = 1
+TINYRFID_FLAG_TAG_PRESENT: Final[int] = 1 << 0
 I2C_WRITE_ATTEMPTS: Final[int] = 5
 I2C_WRITE_RETRY_SECONDS: Final[float] = 0.01
 SOLENOID_WRITE_REPEATS: Final[int] = 3
 SOLENOID_WRITE_REPEAT_SECONDS: Final[float] = 0.02
+SOLENOID_MAX_HIGH_SECONDS: Final[float] = 3.0
 
 REG_VERSION: Final[int] = 0x00
 REG_RAILS: Final[int] = 0x01
@@ -117,12 +117,12 @@ class DeviceState:
     gpio_input_overrides: dict[str, bool] | None = None
     gpio_error: str = ""
     pixel_command: dict[str, object] | None = None
-    ambient_light_lux: float | None = None
-    ambient_light_raw: int | None = None
-    ambient_light_error: str = ""
-    ambient_light_state: str = "unknown"
-    ambient_light_low_threshold_lux: float = BH1750_DEFAULT_THRESHOLD_LUX
-    ambient_light_high_threshold_lux: float = BH1750_DEFAULT_THRESHOLD_LUX
+    tinyrfid_connected: bool = False
+    tinyrfid_tag_present: bool = False
+    tinyrfid_uid: str = ""
+    tinyrfid_scan_count: int = 0
+    tinyrfid_error: str = ""
+    tinyrfid_raw: list[int] | None = None
 
     def to_payload(self) -> dict[str, object]:
         return {
@@ -167,25 +167,9 @@ class DeviceController:
         self._gpio_mode = os.environ.get("OMB_GPIO_PULL", "up").strip().lower()
         self._gpio_ready = False
         self._gpio_error = ""
-        self._bh1750_address = self._int_env("OMB_BH1750_ADDRESS", BH1750_ADDRESS)
-        single_threshold = self._float_env(
-            "OMB_BH1750_THRESHOLD_LUX",
-            BH1750_DEFAULT_THRESHOLD_LUX,
-        )
-        self._bh1750_low_threshold_lux = self._float_env(
-            "OMB_BH1750_LOW_THRESHOLD_LUX",
-            single_threshold,
-        )
-        self._bh1750_high_threshold_lux = self._float_env(
-            "OMB_BH1750_HIGH_THRESHOLD_LUX",
-            single_threshold,
-        )
-        if self._bh1750_low_threshold_lux > self._bh1750_high_threshold_lux:
-            self._bh1750_low_threshold_lux = self._bh1750_high_threshold_lux
-        self._bh1750_update_seconds = self._float_env(
-            "OMB_BH1750_UPDATE_SECONDS",
-            BH1750_UPDATE_SECONDS,
-        )
+        self._solenoid_high_since: dict[str, float] = {}
+        self._solenoid_off_timers: dict[str, threading.Timer] = {}
+        self._tinyrfid_address = self._int_env("OMB_TINYRFID_ADDRESS", TINYRFID_ADDRESS)
         self._state = DeviceState(
             version=2 if self._mock_mode else 0,
             rails=FIXED_RAIL_STATE if self._mock_mode else 0,
@@ -199,14 +183,10 @@ class DeviceController:
             gpio_inputs={name: False for name in GPIO_INPUTS},
             gpio_input_overrides={},
             pixel_command={},
-            ambient_light_lux=0.0 if self._mock_mode else None,
-            ambient_light_raw=0 if self._mock_mode else None,
-            ambient_light_state="low" if self._mock_mode else "unknown",
-            ambient_light_low_threshold_lux=self._bh1750_low_threshold_lux,
-            ambient_light_high_threshold_lux=self._bh1750_high_threshold_lux,
+            tinyrfid_connected=self._mock_mode,
+            tinyrfid_raw=[],
         )
         self._setup_gpio()
-        self._last_bh1750_read_at = 0.0
 
     def set_i2c_write_listener(
         self, listener: Callable[[DeviceState], None] | None
@@ -240,7 +220,7 @@ class DeviceController:
                 GPIO.setup(pin, GPIO.IN, pull_up_down=pull_mode)
             self._gpio_ready = True
             self._gpio_error = ""
-        except RuntimeError as exc:
+        except Exception as exc:
             self._gpio_ready = False
             self._gpio_error = str(exc)
 
@@ -256,7 +236,7 @@ class DeviceController:
                 {name: bool(GPIO.input(pin)) for name, pin in GPIO_INPUTS.items()},
                 "",
             )
-        except RuntimeError as exc:
+        except Exception as exc:
             self._gpio_ready = False
             self._gpio_error = str(exc)
             return ({name: False for name in GPIO_INPUTS}, self._gpio_error)
@@ -286,21 +266,51 @@ class DeviceController:
     def _read_block(self, bus: SMBus, reg: int, length: int) -> list[int]:
         return [value & 0xFF for value in bus.read_i2c_block_data(DEVICE, reg, length)]
 
-    def _read_ambient_light(self, bus: SMBus) -> tuple[float | None, int | None, str]:
+    def _tiny_rfid_checksum(self, data: list[int]) -> int:
+        checksum = 0
+        for value in data[:-1]:
+            checksum ^= value & 0xFF
+        return checksum & 0xFF
+
+    def _format_tiny_rfid_uid(self, data: list[int]) -> str:
+        return ":".join(f"{value & 0xFF:02X}" for value in data)
+
+    def _read_tiny_rfid(self, bus: SMBus) -> tuple[bool, bool, str, int, str, list[int]]:
         try:
-            bus.write_byte(self._bh1750_address, BH1750_POWER_ON)
-            bus.write_byte(self._bh1750_address, BH1750_RESET)
-            bus.write_byte(self._bh1750_address, BH1750_ONE_TIME_HIGH_RES_MODE)
-            time.sleep(BH1750_MEASUREMENT_SECONDS)
-            data = bus.read_i2c_block_data(
-                self._bh1750_address,
-                BH1750_ONE_TIME_HIGH_RES_MODE,
-                2,
+            data = [
+                value & 0xFF
+                for value in bus.read_i2c_block_data(
+                    self._tinyrfid_address,
+                    TINYRFID_STATUS_REGISTER,
+                    TINYRFID_STATUS_LENGTH,
+                )
+            ]
+            if len(data) != TINYRFID_STATUS_LENGTH:
+                return (False, False, "", 0, f"short read: {len(data)} bytes", data)
+            if data[0] != TINYRFID_STATUS_MAGIC:
+                return (False, False, "", 0, f"bad magic: 0x{data[0]:02x}", data)
+            if data[1] != TINYRFID_STATUS_VERSION:
+                return (False, False, "", 0, f"bad version: {data[1]}", data)
+            expected = self._tiny_rfid_checksum(data)
+            if data[-1] != expected:
+                return (
+                    False,
+                    False,
+                    "",
+                    0,
+                    f"bad checksum: got 0x{data[-1]:02x}, expected 0x{expected:02x}",
+                    data,
+                )
+            return (
+                True,
+                bool(data[2] & TINYRFID_FLAG_TAG_PRESENT),
+                self._format_tiny_rfid_uid(data[5:13]),
+                data[3] | (data[4] << 8),
+                "",
+                data,
             )
-            raw = ((data[0] & 0xFF) << 8) | (data[1] & 0xFF)
-            return (raw / 1.2, raw, "")
         except OSError as exc:
-            return (None, None, str(exc))
+            return (False, False, "", 0, str(exc), [])
 
     def _with_fixed_rails(self, state: DeviceState) -> DeviceState:
         state.rails = FIXED_RAIL_STATE
@@ -343,81 +353,92 @@ class DeviceController:
             if repeat + 1 < repeats and repeat_seconds > 0:
                 time.sleep(repeat_seconds)
 
-    def _ambient_light_state_for_lux(self, lux: float | None) -> str:
-        if lux is None:
-            return "unknown"
-        previous = self._state.ambient_light_state
-        if previous == "high":
-            return "low" if lux <= self._bh1750_low_threshold_lux else "high"
-        return "high" if lux >= self._bh1750_high_threshold_lux else "low"
-
-    def _apply_ambient_light_reading(
-        self,
-        state: DeviceState,
-        lux: float | None,
-        raw: int | None,
-        error: str,
-    ) -> None:
-        previous_state = self._state.ambient_light_state
-        state.ambient_light_lux = lux
-        state.ambient_light_raw = raw
-        state.ambient_light_error = error
-        state.ambient_light_state = self._ambient_light_state_for_lux(lux)
-        state.ambient_light_low_threshold_lux = self._bh1750_low_threshold_lux
-        state.ambient_light_high_threshold_lux = self._bh1750_high_threshold_lux
-
-        print(
-            f"Ambient light: state={state.ambient_light_state} lux={lux} "
-            f"raw={raw} low={self._bh1750_low_threshold_lux:.1f} "
-            f"high={self._bh1750_high_threshold_lux:.1f} error={error}",
-            flush=True,
+    def _solenoid_max_high_seconds(self) -> float:
+        return max(
+            0.0,
+            self._float_env("OMB_SOLENOID_MAX_HIGH_SECONDS", SOLENOID_MAX_HIGH_SECONDS),
         )
-        if state.ambient_light_state != previous_state:
+
+    def _cancel_solenoid_off_timer(self, name: str) -> None:
+        timer = self._solenoid_off_timers.pop(name, None)
+        if timer is not None:
+            timer.cancel()
+
+    def _schedule_solenoid_off_timer(self, name: str, since: float) -> None:
+        max_high_seconds = self._solenoid_max_high_seconds()
+        if max_high_seconds <= 0:
+            return
+        existing = self._solenoid_off_timers.get(name)
+        if existing is not None and existing.is_alive():
+            return
+        delay = max(0.0, since + max_high_seconds - time.monotonic())
+        timer = threading.Timer(delay, self._force_solenoid_low_if_overdue, args=(name, since))
+        timer.daemon = True
+        self._solenoid_off_timers[name] = timer
+        timer.start()
+
+    def _track_solenoid_hold_times(self, value: int) -> None:
+        now = time.monotonic()
+        solenoid_mask = value & 0x0F
+        for name, mask in SOLENOIDS.items():
+            if solenoid_mask & mask:
+                since = self._solenoid_high_since.setdefault(name, now)
+                self._schedule_solenoid_off_timer(name, since)
+            else:
+                self._solenoid_high_since.pop(name, None)
+                self._cancel_solenoid_off_timer(name)
+
+    def _force_solenoid_low_if_overdue(self, name: str, since: float) -> None:
+        with self._lock:
+            self._solenoid_off_timers.pop(name, None)
+            current_since = self._solenoid_high_since.get(name)
+            mask = SOLENOIDS.get(name)
+            if current_since != since or mask is None or not (self._state.solenoids & mask):
+                return
+
+            max_high_seconds = self._solenoid_max_high_seconds()
+            held_seconds = time.monotonic() - current_since
+            if max_high_seconds > 0 and held_seconds < max_high_seconds:
+                self._schedule_solenoid_off_timer(name, current_since)
+                return
+
             print(
-                f"BH1750 state changed: {previous_state} -> {state.ambient_light_state}",
+                f"Solenoid {name} held high for {held_seconds:.2f}s; forcing LOW",
                 flush=True,
             )
+            self._update_register(REG_SOLENOIDS, self._state.solenoids & ~mask)
 
-    def _copy_cached_ambient_light(self, state: DeviceState) -> None:
-        state.ambient_light_lux = self._state.ambient_light_lux
-        state.ambient_light_raw = self._state.ambient_light_raw
-        state.ambient_light_error = self._state.ambient_light_error
-        state.ambient_light_state = self._state.ambient_light_state
-        state.ambient_light_low_threshold_lux = self._bh1750_low_threshold_lux
-        state.ambient_light_high_threshold_lux = self._bh1750_high_threshold_lux
+    def _copy_cached_tiny_rfid(self, state: DeviceState) -> None:
+        state.tinyrfid_connected = self._state.tinyrfid_connected
+        state.tinyrfid_tag_present = self._state.tinyrfid_tag_present
+        state.tinyrfid_uid = self._state.tinyrfid_uid
+        state.tinyrfid_scan_count = self._state.tinyrfid_scan_count
+        state.tinyrfid_error = self._state.tinyrfid_error
+        state.tinyrfid_raw = list(self._state.tinyrfid_raw or [])
 
-    def _with_ambient_light_config(self, state: DeviceState) -> DeviceState:
-        state.ambient_light_low_threshold_lux = self._bh1750_low_threshold_lux
-        state.ambient_light_high_threshold_lux = self._bh1750_high_threshold_lux
-        return state
-
-    def _update_ambient_light_once_per_second(self, bus: SMBus, state: DeviceState) -> None:
-        now = time.monotonic()
-
-        if now - self._last_bh1750_read_at < self._bh1750_update_seconds:
-            self._copy_cached_ambient_light(state)
-            return
-
-        self._last_bh1750_read_at = now
-        self._apply_ambient_light_reading(state, *self._read_ambient_light(bus))
-
-    def refresh_ambient_light(self) -> DeviceState:
+    def refresh_tiny_rfid(self) -> DeviceState:
         with self._lock:
             if self._mock_mode:
                 return DeviceState(**asdict(self._state))
             if SMBus is None:
-                self._state.ambient_light_error = "smbus2 is not installed"
-                self._state.ambient_light_state = "unknown"
+                self._state.tinyrfid_connected = False
+                self._state.tinyrfid_error = "smbus2 is not installed"
                 return DeviceState(**asdict(self._state))
             try:
                 with SMBus(I2C_BUS) as bus:
-                    self._last_bh1750_read_at = time.monotonic()
-                    self._apply_ambient_light_reading(
-                        self._state,
-                        *self._read_ambient_light(bus),
-                    )
+                    (
+                        self._state.tinyrfid_connected,
+                        self._state.tinyrfid_tag_present,
+                        self._state.tinyrfid_uid,
+                        self._state.tinyrfid_scan_count,
+                        self._state.tinyrfid_error,
+                        self._state.tinyrfid_raw,
+                    ) = self._read_tiny_rfid(bus)
             except OSError as exc:
-                self._apply_ambient_light_reading(self._state, None, None, str(exc))
+                self._state.tinyrfid_connected = False
+                self._state.tinyrfid_tag_present = False
+                self._state.tinyrfid_error = str(exc)
+                self._state.tinyrfid_raw = []
             return DeviceState(**asdict(self._state))
 
     def _snapshot_checksum(self, data: list[int]) -> int:
@@ -491,25 +512,29 @@ class DeviceController:
                         state = self._with_fixed_rails(
                             self._read_snapshot_state(bus, gpio_inputs, gpio_error)
                         )
-                        self._update_ambient_light_once_per_second(bus, state)
+                        self._copy_cached_tiny_rfid(state)
                         return state
                     except OSError as exc:
                         last_error = exc
-                return DeviceState(
+                state = DeviceState(
                     connected=False,
                     error=str(last_error or "RP2040 status read failed"),
                     backend="i2c",
                     gpio_inputs=gpio_inputs,
                     gpio_error=gpio_error,
                 )
+                self._copy_cached_tiny_rfid(state)
+                return state
         except OSError as exc:
-            return DeviceState(
+            state = DeviceState(
                 connected=False,
                 error=str(exc),
                 backend="i2c",
                 gpio_inputs=gpio_inputs,
                 gpio_error=gpio_error,
             )
+            self._copy_cached_tiny_rfid(state)
+            return state
 
     def read_state(self) -> DeviceState:
         with self._lock:
@@ -526,7 +551,7 @@ class DeviceController:
                 return DeviceState(**asdict(self._state))
 
             self._state = self._read_from_bus()
-            self._with_ambient_light_config(self._state)
+            self._track_solenoid_hold_times(self._state.solenoids)
             self._state.gpio_input_overrides = overrides
             self._state.pixel_command = {
                 **pixel_command,
@@ -538,7 +563,6 @@ class DeviceController:
         with self._lock:
             if refresh_gpio:
                 self._state.gpio_inputs, self._state.gpio_error = self._read_gpio_inputs()
-            self._with_ambient_light_config(self._state)
             return DeviceState(**asdict(self._state))
 
     def _update_register(self, reg: int, value: int) -> DeviceState:
@@ -548,6 +572,8 @@ class DeviceController:
             pixel_command = dict(self._state.pixel_command or {})
             if self._mock_mode:
                 self._apply_cached_register(reg, value)
+                if reg == REG_SOLENOIDS:
+                    self._track_solenoid_hold_times(value)
                 self._state.rails = FIXED_RAIL_STATE
                 self._state.connected = True
                 self._state.error = ""
@@ -579,6 +605,8 @@ class DeviceController:
                         self._write_reg(bus, reg, value)
                 wrote_to_i2c = True
                 self._apply_cached_register(reg, value)
+                if reg == REG_SOLENOIDS:
+                    self._track_solenoid_hold_times(value)
                 self._state.connected = True
                 self._state.error = ""
                 self._state.backend = "i2c"
@@ -828,8 +856,5 @@ class DeviceController:
             "gpio_pins": GPIO_INPUTS,
             "mock_mode": self._mock_mode,
             "gpio_pull": self._gpio_mode,
-            "ambient_light_address": self._bh1750_address,
-            "ambient_light_update_seconds": self._bh1750_update_seconds,
-            "ambient_light_low_threshold_lux": self._bh1750_low_threshold_lux,
-            "ambient_light_high_threshold_lux": self._bh1750_high_threshold_lux,
+            "tinyrfid_address": self._tinyrfid_address,
         }

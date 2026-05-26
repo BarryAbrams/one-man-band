@@ -13,7 +13,7 @@
       <section class="hero">
         <div>
           <p class="eyebrow">Closed-System Controller</p>
-          <h1 x-text="meta.node_title || 'Overworld Bar'">{{ metadata.node_title }}</h1>
+          <h1 x-text="meta.node_title || 'Overworld Squeakeasy'">{{ metadata.node_title }}</h1>
           <p class="lede">
             Authoring and monitoring surface for the OMB, where inputs, outputs, motion, media, and future logic work together.
           </p>
@@ -106,31 +106,86 @@
         <section class="panel">
           <div class="section-header">
             <p class="eyebrow">Inputs</p>
-            <h2>Ambient Light</h2>
-            <p class="section-copy">BH1750 reading from the Raspberry Pi I2C bus, sampled once per second.</p>
+            <h2>TinyRFID</h2>
+            <p class="section-copy">RFID scans reported by the ATtiny1616 reader on the Raspberry Pi I2C bus.</p>
           </div>
           <div class="grid">
-            <section class="tile" :class="state.ambient_light_state === 'high' ? 'active' : ''">
-              <span class="tile-title">BH1750</span>
-              <span class="tile-subtitle" x-text="ambientLightThresholdLabel()"></span>
-              <span class="tile-value" x-text="ambientLightLabel()"></span>
-              <span class="tile-subtitle" x-text="ambientLightStateLabel()"></span>
+            <section class="tile input-tile" :class="state.tinyrfid_tag_present ? 'active' : ''">
+              <span class="tile-title">TinyRFID</span>
+              <span class="tile-subtitle" x-text="tinyRfidConnectionLabel()"></span>
+              <span class="tile-value" x-text="tinyRfidTagLabel()"></span>
+              <span class="tile-subtitle" x-text="tinyRfidUidLabel()"></span>
+              <span class="tile-subtitle" x-text="tinyRfidCatalogLabel()"></span>
+              <span class="tile-subtitle" x-text="tinyRfidScanLabel()"></span>
             </section>
           </div>
-          <template x-if="state.ambient_light_error">
-            <p class="error-text panel-note" x-text="state.ambient_light_error"></p>
+          <template x-if="state.tinyrfid_error">
+            <p class="error-text panel-note" x-text="state.tinyrfid_error"></p>
           </template>
-        </section>
-
-        <section class="panel">
-          <div class="section-header">
-            <p class="eyebrow">Inputs</p>
-            <h2>Offboard</h2>
-            <p class="section-copy">Reserved for network triggers, remote devices, and other incoming influences.</p>
+          <div class="logic-row">
+            <label class="field-label">
+              New Group
+              <input type="text" x-model="rfid.groupName" placeholder="red crystal">
+            </label>
+            <button class="secondary" @click="saveRfidGroup()">Add Group</button>
           </div>
-          <div class="placeholder-card">
-            <span class="tile-title">Items TBD</span>
-            <span class="tile-subtitle">Use this area later for network events, remote controls, and additional trigger sources.</span>
+          <template x-if="rfid.message">
+            <p class="tile-subtitle panel-note" x-text="rfid.message"></p>
+          </template>
+          <section class="rfid-table-wrap">
+            <table class="rfid-table">
+              <thead>
+                <tr>
+                  <th>Scan</th>
+                  <th>UID</th>
+                  <th>Groups</th>
+                  <th>Assign</th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-if="!rfidRecentScans().length">
+                  <tr>
+                    <td colspan="4" class="empty-cell">No scans yet.</td>
+                  </tr>
+                </template>
+                <template x-for="scan in rfidRecentScans()" :key="scan.uid">
+                  <tr :class="scan.is_latest ? 'latest' : ''">
+                    <td>
+                      <span x-text="`#${scan.scan_count}`"></span>
+                      <span class="badge latest-badge" x-show="scan.is_latest">Latest</span>
+                    </td>
+                    <td>
+                      <span class="mono" x-text="scan.uid"></span>
+                    </td>
+                    <td x-text="rfidScanGroupsLabel(scan)"></td>
+                    <td>
+                      <div class="rfid-actions">
+                        <select
+                          class="inline-select"
+                          :disabled="!rfid.catalog.groups.length"
+                          @change="assignRfidScanToGroup(scan.uid, $event.target.value); $event.target.value = ''"
+                        >
+                          <option value="" x-text="rfid.catalog.groups.length ? 'Add to group' : 'No groups'"></option>
+                          <template x-for="group in rfid.catalog.groups" :key="group.name">
+                            <option :value="group.name" x-text="group.label || group.name"></option>
+                          </template>
+                        </select>
+                        <button
+                          class="secondary danger compact-button"
+                          @click="deleteRfidTag(scan.uid)"
+                          :disabled="!rfidTagForUid(scan.uid)"
+                        >Clear</button>
+                      </div>
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </section>
+          <div class="rfid-group-strip">
+            <template x-for="group in rfid.catalog.groups" :key="group.name">
+              <span class="badge" x-text="group.label || group.name"></span>
+            </template>
           </div>
         </section>
       </section>
@@ -313,26 +368,15 @@
             <p class="section-copy">Upload tracks to the OMB and play them locally through the audio path.</p>
           </div>
           <div class="panel-header">
-            <div></div>
+            <div class="subtabs">
+              <button class="tab-button" :class="audio.activeSubtab === 'files' ? 'active' : ''" @click="audio.activeSubtab = 'files'">Audio Files</button>
+              <button class="tab-button" :class="audio.activeSubtab === 'settings' ? 'active' : ''" @click="audio.activeSubtab = 'settings'">Output Settings</button>
+            </div>
             <div class="actions">
               <button class="secondary" @click="loadAudioLibrary()">Refresh Library</button>
             </div>
           </div>
-          <div class="audio-layout">
-            <section class="audio-card">
-              <form class="upload-form" @submit.prevent="uploadAudio">
-                <label class="tile-subtitle" for="audio-file">Upload audio file</label>
-                <input id="audio-file" type="file" accept=".wav,.mp3,.ogg,audio/wav,audio/mpeg,audio/ogg" @change="setUploadFile">
-                <button class="secondary" type="submit" :disabled="uploading || !uploadFile">
-                  <span x-text="uploading ? 'Uploading...' : 'Upload Audio'"></span>
-                </button>
-              </form>
-              <p class="tile-subtitle" x-text="`Accepted: ${(meta.audio_extensions || []).join(', ')}`"></p>
-              <template x-if="audio.status.error">
-                <p class="error-text panel-note" x-text="audio.status.error"></p>
-              </template>
-            </section>
-
+          <div x-show="audio.activeSubtab === 'settings'" x-cloak class="audio-layout">
             <section class="audio-card">
               <div class="audio-status-row">
                 <div>
@@ -347,7 +391,7 @@
                 <button class="secondary" @click="stopAudio()" :disabled="!audio.status.current_track">Stop</button>
               </div>
               <label class="servo-label" for="audio-volume">
-                Volume <span x-text="Math.round((audio.status.volume || 0) * 100) + '%'"></span>
+                Master Volume <span x-text="Math.round((audio.status.volume || 0) * 100) + '%'"></span>
               </label>
               <input
                 id="audio-volume"
@@ -356,19 +400,73 @@
                 min="0"
                 max="100"
                 :value="Math.round((audio.status.volume || 0) * 100)"
-                @change="setAudioVolume(Number($event.target.value) / 100)"
+                @input="setAudioVolume('master', Number($event.target.value) / 100)"
               >
+              <label class="servo-label" for="audio-left-volume">
+                Left <span x-text="Math.round((audio.status.left_volume ?? 1) * 100) + '%'"></span>
+              </label>
+              <input
+                id="audio-left-volume"
+                class="servo-slider"
+                type="range"
+                min="0"
+                max="100"
+                :value="Math.round((audio.status.left_volume ?? 1) * 100)"
+                @input="setAudioVolume('left', Number($event.target.value) / 100)"
+              >
+              <label class="servo-label" for="audio-right-volume">
+                Right <span x-text="Math.round((audio.status.right_volume ?? 1) * 100) + '%'"></span>
+              </label>
+              <input
+                id="audio-right-volume"
+                class="servo-slider"
+                type="range"
+                min="0"
+                max="100"
+                :value="Math.round((audio.status.right_volume ?? 1) * 100)"
+                @input="setAudioVolume('right', Number($event.target.value) / 100)"
+              >
+              <div class="speaker-test">
+                <span class="tile-subtitle">Speaker Test</span>
+                <div class="actions">
+                  <button class="secondary" @click="speakerTest('left')">Left</button>
+                  <button class="secondary" @click="speakerTest('both')">Both</button>
+                  <button class="secondary" @click="speakerTest('right')">Right</button>
+                </div>
+              </div>
             </section>
           </div>
-          <div class="audio-library">
+          <div x-show="audio.activeSubtab === 'files'" x-cloak class="audio-layout">
+            <section class="audio-card">
+              <form class="upload-form" @submit.prevent="uploadAudio">
+                <label class="tile-subtitle" for="audio-file">Upload audio file</label>
+                <input id="audio-file" type="file" accept=".wav,.mp3,.ogg,audio/wav,audio/mpeg,audio/ogg" @change="setUploadFile">
+                <button class="secondary" type="submit" :disabled="uploading || !uploadFile">
+                  <span x-text="uploading ? 'Uploading...' : 'Upload Audio'"></span>
+                </button>
+              </form>
+              <p class="tile-subtitle" x-text="`Accepted: ${(meta.audio_extensions || []).join(', ')}`"></p>
+              <template x-if="audio.status.error">
+                <p class="error-text panel-note" x-text="audio.status.error"></p>
+              </template>
+            </section>
+          </div>
+          <div x-show="audio.activeSubtab === 'files'" x-cloak class="audio-library">
             <template x-if="!audio.tracks.length">
               <p class="tile-subtitle">No audio files uploaded yet.</p>
             </template>
             <template x-for="track in audio.tracks" :key="track.name">
-              <div class="library-row">
+              <div class="library-row" :class="audioFileUsage(track.name).length ? 'in-use' : ''">
                 <div>
                   <span class="tile-title" x-text="track.name"></span>
                   <span class="tile-subtitle" x-text="formatBytes(track.size_bytes)"></span>
+                  <template x-if="audioFileUsage(track.name).length">
+                    <div class="usage-badges">
+                      <template x-for="usage in audioFileUsage(track.name)" :key="usage">
+                        <span class="badge ok" x-text="usage"></span>
+                      </template>
+                    </div>
+                  </template>
                 </div>
                 <div class="actions">
                   <button class="pill-button active" @click="playAudio(track.name)">Play</button>
@@ -770,6 +868,10 @@
                   <input type="checkbox" x-model="logic.form.enabled">
                   Enabled
                 </label>
+                <label class="check-label">
+                  <input type="checkbox" x-model="logic.form.interrupt_others">
+                  Interrupt running output
+                </label>
               </div>
 
               <div class="logic-block">
@@ -793,7 +895,7 @@
                             <option value="">Choose cause</option>
                             <option value="boot">Script boots</option>
                             <option value="gpio">GPIO changes</option>
-                            <option value="ambient_light">Ambient light</option>
+                            <option value="rfid_tag">TinyRFID tag</option>
                             <option value="global_state">Global MQTT state</option>
                             <option value="timer">Timer countdown</option>
                           </select>
@@ -827,13 +929,26 @@
                           </label>
                         </div>
                       </template>
-                      <template x-if="condition.type === 'ambient_light'">
+                      <template x-if="condition.type === 'rfid_tag'">
                         <div class="logic-row">
                           <label class="field-label">
                             State
-                            <select x-model="condition.state">
-                              <option value="low">Unlit</option>
-                              <option value="high">Lit</option>
+                            <select x-model="condition.present">
+                              <option :value="true">Tag present</option>
+                              <option :value="false">No tag</option>
+                            </select>
+                          </label>
+                          <label class="field-label">
+                            UID
+                            <input type="text" placeholder="Any tag" x-model="condition.uid">
+                          </label>
+                          <label class="field-label">
+                            Group
+                            <select x-model="condition.group">
+                              <option value="">Any group</option>
+                              <template x-for="group in rfid.catalog.groups" :key="group.name">
+                                <option :value="group.name" x-text="group.label"></option>
+                              </template>
                             </select>
                           </label>
                           <label class="field-label">
@@ -915,6 +1030,7 @@
                             <optgroup label="Relays">
                               <option value="solenoid_set">Set Relay</option>
                               <option value="solenoid_pulse">Pulse Relay</option>
+                              <option value="relay_sequence_pulse">Pulse Relay Sequence</option>
                             </optgroup>
                             <optgroup label="Servos">
                               <option value="servo_set">Set Servo Position</option>
@@ -1042,6 +1158,39 @@
                             </select>
                           </label>
                         </template>
+                        <label class="field-label">
+                          Delay ms
+                          <input type="number" min="0" x-model.number="action.delay_ms">
+                        </label>
+                      </div>
+                    </template>
+
+                    <template x-if="action.type === 'relay_sequence_pulse'">
+                      <div class="logic-row">
+                        <label class="field-label">
+                          Relay A
+                          <select x-model="action.relay_a">
+                            <template x-for="name in meta.solenoids || []" :key="name">
+                              <option :value="name" x-text="relayLabels[name] || name"></option>
+                            </template>
+                          </select>
+                        </label>
+                        <label class="field-label">
+                          A duration ms
+                          <input type="number" min="0" x-model.number="action.duration_a_ms">
+                        </label>
+                        <label class="field-label">
+                          Relay B
+                          <select x-model="action.relay_b">
+                            <template x-for="name in meta.solenoids || []" :key="name">
+                              <option :value="name" x-text="relayLabels[name] || name"></option>
+                            </template>
+                          </select>
+                        </label>
+                        <label class="field-label">
+                          B duration ms
+                          <input type="number" min="0" x-model.number="action.duration_b_ms">
+                        </label>
                         <label class="field-label">
                           Delay ms
                           <input type="number" min="0" x-model.number="action.delay_ms">
@@ -1206,6 +1355,7 @@
                             <optgroup label="Relays">
                               <option value="solenoid_set">Set Relay</option>
                               <option value="solenoid_pulse">Pulse Relay</option>
+                              <option value="relay_sequence_pulse">Pulse Relay Sequence</option>
                             </optgroup>
                             <optgroup label="Servos">
                               <option value="servo_set">Set Servo Position</option>
@@ -1333,6 +1483,39 @@
                             </select>
                           </label>
                         </template>
+                        <label class="field-label">
+                          Delay ms
+                          <input type="number" min="0" x-model.number="action.delay_ms">
+                        </label>
+                      </div>
+                    </template>
+
+                    <template x-if="action.type === 'relay_sequence_pulse'">
+                      <div class="logic-row">
+                        <label class="field-label">
+                          Relay A
+                          <select x-model="action.relay_a">
+                            <template x-for="name in meta.solenoids || []" :key="name">
+                              <option :value="name" x-text="relayLabels[name] || name"></option>
+                            </template>
+                          </select>
+                        </label>
+                        <label class="field-label">
+                          A duration ms
+                          <input type="number" min="0" x-model.number="action.duration_a_ms">
+                        </label>
+                        <label class="field-label">
+                          Relay B
+                          <select x-model="action.relay_b">
+                            <template x-for="name in meta.solenoids || []" :key="name">
+                              <option :value="name" x-text="relayLabels[name] || name"></option>
+                            </template>
+                          </select>
+                        </label>
+                        <label class="field-label">
+                          B duration ms
+                          <input type="number" min="0" x-model.number="action.duration_b_ms">
+                        </label>
                         <label class="field-label">
                           Delay ms
                           <input type="number" min="0" x-model.number="action.delay_ms">
@@ -1545,17 +1728,24 @@
             gpio_physical_map: {},
             gpio_override_map: {},
             gpio_error: "",
-            ambient_light_lux: null,
-            ambient_light_raw: null,
-            ambient_light_error: "",
-            ambient_light_state: "unknown",
-            ambient_light_low_threshold_lux: 200,
-            ambient_light_high_threshold_lux: 200,
+            fog_relay_events: [],
+            tinyrfid_connected: false,
+            tinyrfid_tag_present: false,
+            tinyrfid_uid: "",
+            tinyrfid_scan_count: 0,
+            tinyrfid_error: "",
+            tinyrfid_raw: [],
+            tinyrfid_tag_known: false,
+            tinyrfid_tag_label: "",
+            tinyrfid_groups: [],
+            tinyrfid_catalog: { tags: [], groups: [] },
+            tinyrfid_scan_history: [],
             audio_status: {},
             logic_timers: [],
             logic_action_events: [],
           },
           audio: {
+            activeSubtab: "files",
             tracks: [],
             status: {
               available: false,
@@ -1564,6 +1754,8 @@
               paused: false,
               current_track: null,
               volume: 1,
+              left_volume: 1,
+              right_volume: 1,
               output: "both",
               error: "",
             },
@@ -1571,6 +1763,12 @@
           socket: null,
           socketConnected: false,
           pollHandle: null,
+          fogRelayEvents: [],
+          rfid: {
+            catalog: { tags: [], groups: [] },
+            groupName: "",
+            message: "",
+          },
           servoDrafts: {},
           servoEditing: {},
           activeTab: "power",
@@ -1596,6 +1794,7 @@
               id: null,
               name: "New rule",
               enabled: true,
+              interrupt_others: false,
               cause: { conditions: [] },
               actions: [],
               else_actions: [],
@@ -1636,6 +1835,7 @@
             this.loadAudioLibrary();
             this.loadLogicRules();
             this.loadAnimations();
+            this.loadRfidCatalog();
             this.startPolling();
 
             if (typeof io === "undefined") {
@@ -1665,6 +1865,7 @@
             this.socket.on("state:update", (payload) => {
               this.logPageEvent("socket:state:update", payload);
               this.state = payload;
+              this.syncRfidCatalog(payload.tinyrfid_catalog);
               this.syncActionToasts(payload.logic_action_events || []);
               this.syncServoDrafts(payload);
               if (payload.audio_status) {
@@ -1675,6 +1876,9 @@
               this.logPageEvent("socket:audio:update", payload);
               this.audio.status = payload.status || this.audio.status;
               this.audio.tracks = payload.tracks || this.audio.tracks;
+            });
+            this.socket.on("rfid:catalog", (payload) => {
+              this.syncRfidCatalog(payload);
             });
             this.socket.on("server:error", (payload) => {
               this.logPageEvent("socket:server:error", payload);
@@ -1744,30 +1948,21 @@
             };
           },
 
-          ambientLightLabel() {
-            if (this.state.ambient_light_lux === null || this.state.ambient_light_lux === undefined) {
-              return "No reading";
+          syncFogRelayEvents(payload = this.state) {
+            if (!Array.isArray(payload.fog_relay_events)) {
+              return;
             }
-            return `${Number(this.state.ambient_light_lux).toFixed(1)} lx`;
-          },
-
-          ambientLightStateLabel() {
-            if (this.state.ambient_light_state === "high") {
-              return "Lit";
-            }
-            if (this.state.ambient_light_state === "low") {
-              return "Unlit";
-            }
-            return "Unknown";
-          },
-
-          ambientLightThresholdLabel() {
-            const low = Number(this.state.ambient_light_low_threshold_lux ?? this.meta.ambient_light_low_threshold_lux ?? 200);
-            const high = Number(this.state.ambient_light_high_threshold_lux ?? this.meta.ambient_light_high_threshold_lux ?? 200);
-            if (low === high) {
-              return `Threshold ${high.toFixed(1)} lx`;
-            }
-            return `Low ${low.toFixed(1)} lx / High ${high.toFixed(1)} lx`;
+            this.fogRelayEvents = payload.fog_relay_events
+              .map((event, index) => ({
+                key: `${event.at || index}-${event.source || "fog"}`,
+                ageMs: Number(event.age_ms),
+                source: String(event.source || "fog"),
+              }))
+              .filter((event) => (
+                Number.isFinite(event.ageMs)
+                && event.ageMs >= 0
+                && event.ageMs <= 30 * 60 * 1000
+              ));
           },
 
           defaultAnimation() {
@@ -2588,8 +2783,8 @@
             if (type === "global_state") {
               return { type: "global_state", state: "active" };
             }
-            if (type === "ambient_light") {
-              return { type: "ambient_light", state: "high", debounce_ms: 50, cooldown_ms: 1000 };
+            if (type === "rfid_tag") {
+              return { type: "rfid_tag", present: true, uid: "", group: "", debounce_ms: 50, cooldown_ms: 1000 };
             }
             if (type === "timer" || this.isTimerCause(type)) {
               return { type: "timer", timer_name: "Timer1", timer_event: this.timerEventFromType(type), percent: "" };
@@ -2623,6 +2818,10 @@
             }
             if (type === "solenoid_pulse") {
               return { type, name: firstSolenoid, duration_ms: 1000, delay_ms: 0 };
+            }
+            if (type === "relay_sequence_pulse") {
+              const secondSolenoid = (this.meta.solenoids || ["P0", "P1"])[1] || firstSolenoid;
+              return { type, relay_a: firstSolenoid, duration_a_ms: 1000, relay_b: secondSolenoid, duration_b_ms: 1000, delay_ms: 0 };
             }
             if (type === "solenoid_set") {
               return { type, name: firstSolenoid, enabled: true, delay_ms: 0 };
@@ -2668,6 +2867,7 @@
               id: null,
               name: "New rule",
               enabled: true,
+              interrupt_others: false,
               cause: { conditions: [] },
               actions: [],
               else_actions: [],
@@ -2688,6 +2888,119 @@
             }
           },
 
+          syncRfidCatalog(catalog) {
+            if (!catalog) {
+              return;
+            }
+            this.rfid.catalog = {
+              tags: Array.isArray(catalog.tags) ? catalog.tags : [],
+              groups: Array.isArray(catalog.groups) ? catalog.groups : [],
+            };
+            this.meta.rfid_catalog = this.rfid.catalog;
+          },
+
+          async loadRfidCatalog() {
+            try {
+              const response = await fetch("/api/rfid");
+              if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+              }
+              this.syncRfidCatalog(await response.json());
+            } catch (error) {
+              this.rfid.message = `Unable to load RFID catalog: ${error.message}`;
+            }
+          },
+
+          rfidRecentScans() {
+            return Array.isArray(this.state.tinyrfid_scan_history)
+              ? this.state.tinyrfid_scan_history.slice(0, 20)
+              : [];
+          },
+
+          rfidTagForUid(uid) {
+            const normalized = String(uid || "").toUpperCase();
+            return (this.rfid.catalog.tags || []).find((tag) => String(tag.uid || "").toUpperCase() === normalized) || null;
+          },
+
+          rfidGroupLabel(name) {
+            const group = (this.rfid.catalog.groups || []).find((item) => item.name === name);
+            return group?.label || name;
+          },
+
+          rfidScanGroupsLabel(scan) {
+            const tag = this.rfidTagForUid(scan.uid);
+            const groups = tag?.groups?.length ? tag.groups : scan.groups || [];
+            if (!groups.length) {
+              return "Ungrouped";
+            }
+            return groups.map((group) => this.rfidGroupLabel(group)).join(", ");
+          },
+
+          async assignRfidScanToGroup(uid, groupName) {
+            if (!uid || !groupName) {
+              return;
+            }
+            const existing = this.rfidTagForUid(uid);
+            const groups = Array.from(new Set([...(existing?.groups || []), groupName]));
+            const payload = {
+              uid,
+              label: existing?.label || uid,
+              groups,
+              enabled: true,
+            };
+            try {
+              const response = await fetch("/api/rfid/tags", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+              });
+              const result = await response.json();
+              if (!response.ok) {
+                throw new Error(result.error || `HTTP ${response.status}`);
+              }
+              this.syncRfidCatalog(result.catalog);
+              this.rfid.message = `${uid} added to ${this.rfidGroupLabel(groupName)}`;
+              await this.loadState();
+            } catch (error) {
+              this.rfid.message = `Group assignment failed: ${error.message}`;
+            }
+          },
+
+          async saveRfidGroup() {
+            if (!this.rfid.groupName.trim()) {
+              return;
+            }
+            try {
+              const response = await fetch("/api/rfid/groups", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ label: this.rfid.groupName }),
+              });
+              const result = await response.json();
+              if (!response.ok) {
+                throw new Error(result.error || `HTTP ${response.status}`);
+              }
+              this.syncRfidCatalog(result.catalog);
+              this.rfid.groupName = "";
+            } catch (error) {
+              this.rfid.message = `Group save failed: ${error.message}`;
+            }
+          },
+
+          async deleteRfidTag(uid) {
+            try {
+              const response = await fetch(`/api/rfid/tags/${encodeURIComponent(uid)}`, { method: "DELETE" });
+              const result = await response.json();
+              if (!response.ok) {
+                throw new Error(result.error || `HTTP ${response.status}`);
+              }
+              this.syncRfidCatalog(result.catalog);
+              await this.loadState();
+            } catch (error) {
+              this.rfid.message = `Delete failed: ${error.message}`;
+            }
+          },
+
           editLogicRule(rule) {
             const conditions = this.normalizeLogicConditions(rule.cause || {});
             this.logic.selectedId = rule.id;
@@ -2696,6 +3009,7 @@
               id: rule.id,
               name: rule.name,
               enabled: rule.enabled,
+              interrupt_others: Boolean(rule.interrupt_others),
               cause: { conditions },
               actions: (rule.actions || []).map((action) => this.normalizeLogicAction(action)),
               else_actions: (rule.else_actions || []).map((action) => this.normalizeLogicAction(action)),
@@ -2712,6 +3026,15 @@
               normalized.timer_name = this.sanitizeTimerName(normalized.timer_name || "Timer1");
             }
             if (normalized.type === "solenoid_pulse" || normalized.type === "solenoid_set") {
+              normalized.delay_ms = Number(normalized.delay_ms || 0);
+            }
+            if (normalized.type === "relay_sequence_pulse") {
+              const firstSolenoid = (this.meta.solenoids || ["P0"])[0];
+              const secondSolenoid = (this.meta.solenoids || ["P0", "P1"])[1] || firstSolenoid;
+              normalized.relay_a = normalized.relay_a || normalized.name || firstSolenoid;
+              normalized.relay_b = normalized.relay_b || secondSolenoid;
+              normalized.duration_a_ms = Number(normalized.duration_a_ms || normalized.duration_ms || 1000);
+              normalized.duration_b_ms = Number(normalized.duration_b_ms || 1000);
               normalized.delay_ms = Number(normalized.delay_ms || 0);
             }
             if (normalized.type === "pixels_animate") {
@@ -2757,10 +3080,12 @@
                 state: this.globalStateValue(cause.state || "active"),
               };
             }
-            if (cause.type === "ambient_light") {
+            if (cause.type === "rfid_tag") {
               return {
                 ...cause,
-                state: cause.state === "low" ? "low" : "high",
+                present: cause.present === false || cause.present === "false" ? false : true,
+                uid: String(cause.uid || "").trim().toUpperCase(),
+                group: String(cause.group || "").trim().toLowerCase(),
                 debounce_ms: Number(cause.debounce_ms ?? 50),
                 cooldown_ms: Number(cause.cooldown_ms ?? 1000),
               };
@@ -2851,6 +3176,17 @@
               if (payload.type === "solenoid_pulse") {
                 payload.delay_ms = Math.max(0, Number(payload.delay_ms) || 0);
               }
+              if (payload.type === "relay_sequence_pulse") {
+                const firstSolenoid = (this.meta.solenoids || ["P0"])[0];
+                const secondSolenoid = (this.meta.solenoids || ["P0", "P1"])[1] || firstSolenoid;
+                payload.relay_a = payload.relay_a || firstSolenoid;
+                payload.relay_b = payload.relay_b || secondSolenoid;
+                payload.duration_a_ms = Math.max(0, Number(payload.duration_a_ms) || 0);
+                payload.duration_b_ms = Math.max(0, Number(payload.duration_b_ms) || 0);
+                payload.delay_ms = Math.max(0, Number(payload.delay_ms) || 0);
+                delete payload.name;
+                delete payload.duration_ms;
+              }
               if (payload.type === "servo_set") {
                 payload.enable = this.logicBool(payload.enable);
               }
@@ -2899,8 +3235,10 @@
               if (payload.type === "gpio") {
                 payload.state = this.logicBool(payload.state);
               }
-              if (payload.type === "ambient_light") {
-                payload.state = payload.state === "low" ? "low" : "high";
+              if (payload.type === "rfid_tag") {
+                payload.present = payload.present === false || payload.present === "false" ? false : true;
+                payload.uid = String(payload.uid || "").trim().toUpperCase();
+                payload.group = String(payload.group || "").trim().toLowerCase();
               }
               if (payload.type === "timer") {
                 payload.timer_name = this.sanitizeTimerName(payload.timer_name || "Timer1");
@@ -2925,6 +3263,7 @@
               id: this.logic.form.id,
               name: this.logic.form.name,
               enabled: this.logic.form.enabled,
+              interrupt_others: Boolean(this.logic.form.interrupt_others),
               cause: { conditions },
               actions,
               else_actions: this.supportsElse() ? this.serializeLogicActions(this.logic.form.else_actions || []) : [],
@@ -3003,11 +3342,12 @@
             const actionCount = (rule.actions || []).length;
             const elseCount = (rule.else_actions || []).length;
             const suffix = elseCount ? `, else ${elseCount} action${elseCount === 1 ? "" : "s"}` : "";
+            const prefix = rule.interrupt_others ? "Interrupts, " : "";
             if (conditions.length) {
               const label = conditions.map((condition) => this.logicConditionSummary(condition)).join(" AND ");
-              return `${label}, ${actionCount} action${actionCount === 1 ? "" : "s"}${suffix}`;
+              return `${prefix}${label}, ${actionCount} action${actionCount === 1 ? "" : "s"}${suffix}`;
             }
-            return `${actionCount} action${actionCount === 1 ? "" : "s"}`;
+            return `${prefix}${actionCount} action${actionCount === 1 ? "" : "s"}`;
           },
 
           logicConditionSummary(condition) {
@@ -3017,8 +3357,14 @@
             if (condition.type === "gpio") {
               return `Input ${condition.input} ${this.logicBool(condition.state) ? "HIGH" : "LOW"}`;
             }
-            if (condition.type === "ambient_light") {
-              return `Ambient light ${condition.state === "low" ? "unlit" : "lit"}`;
+            if (condition.type === "rfid_tag") {
+              if (condition.present === false || condition.present === "false") {
+                return "TinyRFID no tag";
+              }
+              if (condition.group) {
+                return `TinyRFID group ${condition.group}`;
+              }
+              return condition.uid ? `TinyRFID ${condition.uid}` : "TinyRFID tag present";
             }
             if (condition.type === "timer") {
               if (condition.timer_event === "started") {
@@ -3089,7 +3435,7 @@
 
           supportsElse() {
             const conditions = this.logic.form.cause.conditions || [];
-            return conditions.length > 0 && conditions.every((condition) => condition.type === "gpio");
+            return conditions.length > 0 && conditions.every((condition) => ["gpio", "rfid_tag"].includes(condition.type));
           },
 
           sanitizeTimerName(value) {
@@ -3205,6 +3551,7 @@
               }
               this.state = await response.json();
               this.logPageEvent("fetch:/api/state", this.state);
+              this.syncRfidCatalog(this.state.tinyrfid_catalog);
               this.syncServoDrafts(this.state);
               if (this.state.audio_status) {
                 this.audio.status = this.state.audio_status;
@@ -3311,6 +3658,47 @@
                 error: `Unable to load audio library: ${error.message}`,
               };
             }
+          },
+
+          audioFileUsage(filename) {
+            const usage = [];
+            const addUsage = (label) => {
+              if (label && !usage.includes(label)) {
+                usage.push(label);
+              }
+            };
+            const scanActions = (actions, ruleName) => {
+              (actions || []).forEach((action) => {
+                if (action.type !== "audio_play") {
+                  return;
+                }
+                if (action.mode === "playlist") {
+                  const playlist = Array.isArray(action.playlist) ? action.playlist : [];
+                  if (playlist.includes(filename)) {
+                    addUsage(`Logic: ${ruleName}`);
+                  }
+                  return;
+                }
+                if (action.filename === filename) {
+                  addUsage(`Logic: ${ruleName}`);
+                }
+              });
+            };
+
+            (this.logic.rules || []).forEach((rule) => {
+              const ruleName = rule.name || `Rule ${rule.id}`;
+              scanActions(rule.actions, ruleName);
+              scanActions(rule.else_actions, ruleName);
+            });
+
+            (this.animations.items || []).forEach((animation) => {
+              const tracks = animation.timeline?.tracks || [];
+              if (tracks.some((track) => track.type === "audio" && track.target?.filename === filename)) {
+                addUsage(`Animation: ${animation.name || `Animation ${animation.id}`}`);
+              }
+            });
+
+            return usage;
           },
 
           setUploadFile(event) {
@@ -3443,9 +3831,15 @@
             }
           },
 
-          setAudioVolume(volume) {
+          setAudioVolume(channel, volume) {
             if (this.socketConnected && this.socket) {
-              this.socket.emit("audio:set_volume", { volume });
+              this.socket.emit("audio:set_volume", { channel, volume });
+            }
+          },
+
+          speakerTest(speaker) {
+            if (this.socketConnected && this.socket) {
+              this.socket.emit("audio:speaker_test", { speaker });
             }
           },
 
@@ -3493,6 +3887,38 @@
               return `Override: ${this.state.gpio_override_map[name] ? 'HIGH' : 'LOW'}`;
             }
             return "Live input";
+          },
+
+          tinyRfidConnectionLabel() {
+            return this.state.tinyrfid_connected ? "I2C 0x13 online" : "I2C 0x13 offline";
+          },
+
+          tinyRfidTagLabel() {
+            if (!this.state.tinyrfid_connected) {
+              return "OFFLINE";
+            }
+            return this.state.tinyrfid_tag_present ? "TAG SEEN" : "NO TAG";
+          },
+
+          tinyRfidUidLabel() {
+            return this.state.tinyrfid_uid ? `UID ${this.state.tinyrfid_uid}` : "UID none";
+          },
+
+          tinyRfidCatalogLabel() {
+            if (!this.state.tinyrfid_uid) {
+              return "No catalog match";
+            }
+            if (!this.state.tinyrfid_tag_known) {
+              return "Unknown tag";
+            }
+            return this.state.tinyrfid_groups?.length
+              ? `Groups: ${this.state.tinyrfid_groups.map((group) => this.rfidGroupLabel(group)).join(", ")}`
+              : "Known tag, no groups";
+          },
+
+          tinyRfidScanLabel() {
+            const count = Number(this.state.tinyrfid_scan_count || 0);
+            return `${count} scan${count === 1 ? "" : "s"}`;
           },
         };
       }

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
+import math
+import struct
 import threading
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -25,6 +28,8 @@ class AudioStatus:
     paused: bool = False
     current_track: str | None = None
     volume: float = 1.0
+    left_volume: float = 1.0
+    right_volume: float = 1.0
     output: str = "both"
     error: str = ""
 
@@ -36,8 +41,10 @@ class AudioManager:
     def __init__(self, base_dir: Path) -> None:
         self._lock = threading.Lock()
         self._audio_dir = base_dir / "uploads" / "audio"
+        self._settings_path = base_dir / "data" / "audio_settings.json"
         self._audio_dir.mkdir(parents=True, exist_ok=True)
         self._status = AudioStatus(available=pygame is not None)
+        self._load_settings()
         self._channel = None
 
     @property
@@ -91,6 +98,43 @@ class AudioManager:
             self._status.playing = False
             self._status.current_track = None
             self._channel = None
+
+    def _clamped_float(self, value: object, default: float) -> float:
+        try:
+            return max(0.0, min(1.0, float(value)))
+        except (TypeError, ValueError):
+            return default
+
+    def _load_settings(self) -> None:
+        try:
+            with self._settings_path.open("r", encoding="utf-8") as settings_file:
+                settings = json.load(settings_file)
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return
+        if not isinstance(settings, dict):
+            return
+        self._status.volume = self._clamped_float(settings.get("volume"), self._status.volume)
+        self._status.left_volume = self._clamped_float(
+            settings.get("left_volume"),
+            self._status.left_volume,
+        )
+        self._status.right_volume = self._clamped_float(
+            settings.get("right_volume"),
+            self._status.right_volume,
+        )
+
+    def _save_settings(self) -> None:
+        self._settings_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "volume": self._status.volume,
+            "left_volume": self._status.left_volume,
+            "right_volume": self._status.right_volume,
+        }
+        temp_path = self._settings_path.with_suffix(".json.tmp")
+        with temp_path.open("w", encoding="utf-8") as settings_file:
+            json.dump(payload, settings_file, sort_keys=True)
+            settings_file.write("\n")
+        temp_path.replace(self._settings_path)
 
     def status(self) -> AudioStatus:
         with self._lock:
@@ -160,26 +204,18 @@ class AudioManager:
                     self._channel.stop()
                     self._channel = None
 
-                if output == "both":
-                    pygame.mixer.music.load(str(path))
-                    pygame.mixer.music.set_volume(self._status.volume)
-                    pygame.mixer.music.play()
-                else:
-                    sound = pygame.mixer.Sound(str(path))
-                    channel = pygame.mixer.find_channel(True)
-                    if channel is None:
-                        raise RuntimeError("No pygame audio channel is available")
-                    if output == "right":
-                        channel.set_volume(0.0, self._status.volume)
-                    else:
-                        channel.set_volume(self._status.volume, 0.0)
-                    channel.play(sound)
-                    self._channel = channel
+                sound = pygame.mixer.Sound(str(path))
+                channel = pygame.mixer.find_channel(True)
+                if channel is None:
+                    raise RuntimeError("No pygame audio channel is available")
+                self._channel = channel
+                self._status.output = output
+                self._apply_channel_volume()
+                channel.play(sound)
 
                 self._status.playing = True
                 self._status.paused = False
                 self._status.current_track = path.name
-                self._status.output = output
                 self._status.error = ""
             except Exception as exc:  # pragma: no cover - depends on target hardware
                 self._status.error = str(exc)
@@ -234,18 +270,99 @@ class AudioManager:
                 self._status.playing = True
             return AudioStatus(**asdict(self._status))
 
-    def set_volume(self, value: float) -> AudioStatus:
+    def speaker_test(self, speaker: str = "both", duration: float = 1.0) -> AudioStatus:
+        with self._lock:
+            if not self._ensure_mixer():
+                return AudioStatus(**asdict(self._status))
+
+            output = speaker if speaker in {"left", "right", "both"} else "both"
+            try:
+                pygame.mixer.music.stop()
+                if self._channel is not None:
+                    self._channel.stop()
+                    self._channel = None
+
+                mixer_init = pygame.mixer.get_init()
+                if mixer_init is None:
+                    raise RuntimeError("pygame mixer is not initialized")
+
+                sample_rate, sample_format, channels = mixer_init
+                if abs(int(sample_format)) != 16:
+                    raise RuntimeError(
+                        f"Speaker test needs 16-bit mixer audio, got format {sample_format}"
+                    )
+
+                frame_count = max(1, int(sample_rate * max(0.1, min(5.0, duration))))
+                amplitude = int(32767 * 0.45)
+                frequency = 880.0
+                frames = bytearray()
+                for frame in range(frame_count):
+                    envelope = min(1.0, frame / max(1, int(sample_rate * 0.02)))
+                    envelope = min(envelope, (frame_count - frame) / max(1, int(sample_rate * 0.02)))
+                    sample = int(
+                        math.sin((2.0 * math.pi * frequency * frame) / sample_rate)
+                        * amplitude
+                        * max(0.0, envelope)
+                    )
+                    if channels <= 1:
+                        frames.extend(struct.pack("<h", sample))
+                    else:
+                        for channel_index in range(channels):
+                            muted = (
+                                (output == "left" and channel_index == 1)
+                                or (output == "right" and channel_index == 0)
+                            )
+                            frames.extend(struct.pack("<h", 0 if muted else sample))
+
+                sound = pygame.mixer.Sound(buffer=bytes(frames))
+                channel = pygame.mixer.find_channel(True)
+                if channel is None:
+                    raise RuntimeError("No pygame audio channel is available")
+                self._channel = channel
+                self._status.output = output
+                self._apply_channel_volume()
+                channel.play(sound)
+
+                label = output.capitalize()
+                self._status.playing = True
+                self._status.paused = False
+                self._status.current_track = f"Speaker test: {label}"
+                self._status.error = ""
+            except Exception as exc:  # pragma: no cover - depends on target hardware
+                self._status.error = str(exc)
+                self._status.playing = False
+                self._status.paused = False
+            return AudioStatus(**asdict(self._status))
+
+    def _channel_volumes(self) -> tuple[float, float]:
+        master = self._status.volume
+        left = master * self._status.left_volume
+        right = master * self._status.right_volume
+        if self._status.output == "left":
+            return (left, 0.0)
+        if self._status.output == "right":
+            return (0.0, right)
+        return (left, right)
+
+    def _apply_channel_volume(self) -> None:
+        if self._channel is None:
+            return
+        left, right = self._channel_volumes()
+        self._channel.set_volume(left, right)
+
+    def set_volume(self, value: float, channel: str = "master") -> AudioStatus:
         with self._lock:
             clamped = max(0.0, min(1.0, value))
-            self._status.volume = clamped
+            if channel == "left":
+                self._status.left_volume = clamped
+            elif channel == "right":
+                self._status.right_volume = clamped
+            else:
+                self._status.volume = clamped
             if self._status.initialized and pygame is not None:
                 if self._channel is not None:
-                    if self._status.output == "right":
-                        self._channel.set_volume(0.0, clamped)
-                    elif self._status.output == "left":
-                        self._channel.set_volume(clamped, 0.0)
-                    else:
-                        self._channel.set_volume(clamped)
-                else:
+                    self._apply_channel_volume()
+                elif channel not in {"left", "right"}:
                     pygame.mixer.music.set_volume(clamped)
+            self._save_settings()
             return AudioStatus(**asdict(self._status))

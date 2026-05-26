@@ -46,6 +46,7 @@ class LogicRule:
     id: int
     name: str
     enabled: bool
+    interrupt_others: bool
     cause: dict[str, Any]
     actions: list[dict[str, Any]]
     else_actions: list[dict[str, Any]]
@@ -97,6 +98,7 @@ class LogicStore:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL,
                     enabled INTEGER NOT NULL DEFAULT 1,
+                    interrupt_others INTEGER NOT NULL DEFAULT 0,
                     cause_json TEXT NOT NULL,
                     actions_json TEXT NOT NULL,
                     else_actions_json TEXT NOT NULL DEFAULT '[]',
@@ -112,6 +114,10 @@ class LogicStore:
             if "else_actions_json" not in columns:
                 connection.execute(
                     "ALTER TABLE logic_rules ADD COLUMN else_actions_json TEXT NOT NULL DEFAULT '[]'"
+                )
+            if "interrupt_others" not in columns:
+                connection.execute(
+                    "ALTER TABLE logic_rules ADD COLUMN interrupt_others INTEGER NOT NULL DEFAULT 0"
                 )
 
     def list_rules(self) -> list[LogicRule]:
@@ -134,6 +140,7 @@ class LogicStore:
         now = time.time()
         name = str(payload.get("name") or "Untitled rule").strip() or "Untitled rule"
         enabled = bool(payload.get("enabled", True))
+        interrupt_others = bool(payload.get("interrupt_others", False))
         cause = self._cause_field(payload)
         actions = self._actions_field(payload)
         else_actions = self._optional_actions_field(payload, "else_actions")
@@ -144,12 +151,13 @@ class LogicStore:
                 connection.execute(
                     """
                     UPDATE logic_rules
-                    SET name = ?, enabled = ?, cause_json = ?, actions_json = ?, else_actions_json = ?, updated_at = ?
+                    SET name = ?, enabled = ?, interrupt_others = ?, cause_json = ?, actions_json = ?, else_actions_json = ?, updated_at = ?
                     WHERE id = ?
                     """,
                     (
                         name,
                         int(enabled),
+                        int(interrupt_others),
                         json.dumps(cause, sort_keys=True),
                         json.dumps(actions, sort_keys=True),
                         json.dumps(else_actions, sort_keys=True),
@@ -167,12 +175,13 @@ class LogicStore:
             cursor = connection.execute(
                 """
                 INSERT INTO logic_rules
-                    (name, enabled, cause_json, actions_json, else_actions_json, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (name, enabled, interrupt_others, cause_json, actions_json, else_actions_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     name,
                     int(enabled),
+                    int(interrupt_others),
                     json.dumps(cause, sort_keys=True),
                     json.dumps(actions, sort_keys=True),
                     json.dumps(else_actions, sort_keys=True),
@@ -194,6 +203,7 @@ class LogicStore:
             id=int(row["id"]),
             name=str(row["name"]),
             enabled=bool(row["enabled"]),
+            interrupt_others=bool(row["interrupt_others"]),
             cause=json.loads(str(row["cause_json"])),
             actions=json.loads(str(row["actions_json"])),
             else_actions=json.loads(str(row["else_actions_json"])),
@@ -270,6 +280,8 @@ class LogicEngine:
         self._timer_position_seen: set[tuple[int, str, int, int | None]] = set()
         self._audio_playlist_positions: dict[tuple[int, str, int], int] = {}
         self._running_animations: set[str] = set()
+        self._logic_action_timers: list[threading.Timer] = []
+        self._logic_generation = 0
         self._action_event_id = 0
         self._action_events: list[ActionEvent] = []
         self._boot_ran = False
@@ -279,7 +291,7 @@ class LogicEngine:
             "logic_cause_types": [
                 "boot",
                 "gpio",
-                "ambient_light",
+                "rfid_tag",
                 "timer",
                 "global_state",
             ],
@@ -292,6 +304,7 @@ class LogicEngine:
                 "timer_end",
                 "solenoid_set",
                 "solenoid_pulse",
+                "relay_sequence_pulse",
                 "servo_set",
                 "pixels_animate",
                 "dmx_fade",
@@ -323,6 +336,12 @@ class LogicEngine:
                 )
             return timers
 
+    def is_busy(self) -> bool:
+        now = time.monotonic()
+        self._update_timers(now)
+        with self._lock:
+            return any(not timer.ended for timer in self._timers.values())
+
     def action_events_payload(self) -> list[dict[str, Any]]:
         cutoff = time.monotonic() - 10
         with self._lock:
@@ -352,6 +371,58 @@ class LogicEngine:
             self._timer_position_seen = {
                 item for item in self._timer_position_seen if item[0] != rule_id
             }
+
+    def _logic_generation_value(self) -> int:
+        with self._lock:
+            return self._logic_generation
+
+    def _start_logic_timer(
+        self,
+        delay_seconds: float,
+        callback: Callable[..., None],
+        *args: Any,
+    ) -> None:
+        generation = self._logic_generation_value()
+
+        def run_if_current() -> None:
+            if self._logic_generation_value() != generation:
+                return
+            callback(*args)
+
+        timer = threading.Timer(delay_seconds, run_if_current)
+        timer.daemon = True
+        with self._lock:
+            self._logic_action_timers = [
+                item for item in self._logic_action_timers if item.is_alive()
+            ]
+            self._logic_action_timers.append(timer)
+        timer.start()
+
+    def _cancel_pending_logic_actions(self) -> None:
+        with self._lock:
+            self._logic_generation += 1
+            timers = self._logic_action_timers
+            self._logic_action_timers = []
+        for timer in timers:
+            timer.cancel()
+
+    def _clear_countdown_timers(self) -> None:
+        with self._lock:
+            self._timers.clear()
+            self._timer_start_seen.clear()
+            self._timer_end_seen.clear()
+            self._timer_position_seen.clear()
+
+    def _interrupt_running_sequences(self) -> None:
+        self._cancel_pending_logic_actions()
+        self._clear_countdown_timers()
+        with self._lock:
+            self._running_animations.clear()
+        if self._on_animation_stop:
+            self._on_animation_stop("")
+        self._audio_manager.stop()
+        self._controller.clear_solenoids()
+        self._record_action_event("system", "Interrupted", "Stopped prior audio, animations, timers, and relays")
 
     def run_rule_now(self, rule_id: int, branch: str = "then") -> LogicRule:
         if branch not in {"then", "else"}:
@@ -436,7 +507,7 @@ class LogicEngine:
             return None
         if any(condition.get("type") == "boot" for condition in conditions):
             return None
-        if self._conditions_are_satisfied(rule, conditions, gpio, now):
+        if self._conditions_are_satisfied(rule, conditions, state, gpio, now):
             with self._lock:
                 if self._last_branch.get(rule.id) == "then":
                     return None
@@ -467,6 +538,7 @@ class LogicEngine:
         self,
         rule: LogicRule,
         conditions: list[dict[str, Any]],
+        state: dict[str, Any],
         gpio: dict[str, bool],
         now: float,
     ) -> bool:
@@ -480,11 +552,22 @@ class LogicEngine:
                         self._candidate_since.pop(rule.id, None)
                     return False
                 continue
-            if condition_type == "ambient_light":
-                expected = self._ambient_light_state(condition.get("state"))
-                raw_actual = state.get("ambient_light_state")
-                actual = "unknown" if raw_actual is None else self._ambient_light_state(raw_actual)
-                if actual == "unknown" or actual != expected:
+            if condition_type == "rfid_tag":
+                expected_present = self._bool(condition.get("present", True))
+                actual_present = bool(state.get("tinyrfid_tag_present"))
+                expected_uid = str(condition.get("uid") or "").strip().upper()
+                actual_uid = str(state.get("tinyrfid_uid") or "").strip().upper()
+                expected_group = str(condition.get("group") or "").strip().lower()
+                actual_groups = {str(item).strip().lower() for item in state.get("tinyrfid_groups") or []}
+                if actual_present != expected_present:
+                    with self._lock:
+                        self._candidate_since.pop(rule.id, None)
+                    return False
+                if expected_present and expected_uid and actual_uid != expected_uid:
+                    with self._lock:
+                        self._candidate_since.pop(rule.id, None)
+                    return False
+                if expected_present and expected_group and expected_group not in actual_groups:
                     with self._lock:
                         self._candidate_since.pop(rule.id, None)
                     return False
@@ -508,7 +591,7 @@ class LogicEngine:
 
     def _conditions_support_else(self, conditions: list[dict[str, Any]]) -> bool:
         return conditions and all(
-            condition.get("type") in {"gpio", "ambient_light"} for condition in conditions
+            condition.get("type") in {"gpio", "rfid_tag"} for condition in conditions
         )
 
     def _debounce_seconds(self, conditions: list[dict[str, Any]]) -> float:
@@ -516,7 +599,7 @@ class LogicEngine:
             [
                 max(0, int(condition.get("debounce_ms", 50))) / 1000
                 for condition in conditions
-                if condition.get("type") in {"gpio", "ambient_light"}
+                if condition.get("type") in {"gpio", "rfid_tag"}
             ]
             or [0]
         )
@@ -526,22 +609,10 @@ class LogicEngine:
             [
                 max(0, int(condition.get("cooldown_ms", 1000))) / 1000
                 for condition in conditions
-                if condition.get("type") in {"gpio", "ambient_light"}
+                if condition.get("type") in {"gpio", "rfid_tag"}
             ]
             or [0]
         )
-
-    def _ambient_light_state(self, value: Any) -> str:
-        if value is None:
-            return "low"
-        state = str(value or "unknown").strip().lower()
-        if state in {"high", "lit", "on", "true", "1"}:
-            return "high"
-        if state in {"low", "unlit", "off", "false", "0"}:
-            return "low"
-        if state == "":
-            return "low"
-        return "unknown"
 
     def _timer_event_should_fire(self, rule: LogicRule, condition: dict[str, Any], now: float) -> bool:
         timer_name = self._timer_name(condition.get("timer_name") or "")
@@ -631,6 +702,8 @@ class LogicEngine:
 
     def _fire(self, rule: LogicRule, branch: str = "then") -> None:
         actions = rule.actions if branch == "then" else rule.else_actions
+        if rule.interrupt_others:
+            self._interrupt_running_sequences()
         for index, action in enumerate(actions):
             self._run_action(action, rule.id, branch, index)
         if self._on_action:
@@ -684,17 +757,19 @@ class LogicEngine:
             if delay_ms <= 0:
                 self._run_solenoid_set(action, notify=False)
             else:
-                timer = threading.Timer(delay_ms / 1000, self._run_solenoid_set, args=(action,))
-                timer.daemon = True
-                timer.start()
+                self._start_logic_timer(delay_ms / 1000, self._run_solenoid_set, action)
         elif action_type == "solenoid_pulse":
             delay_ms = max(0, int(action.get("delay_ms", 0) or 0))
             if delay_ms <= 0:
                 self._run_solenoid_pulse(action, notify=False)
             else:
-                timer = threading.Timer(delay_ms / 1000, self._run_solenoid_pulse, args=(action,))
-                timer.daemon = True
-                timer.start()
+                self._start_logic_timer(delay_ms / 1000, self._run_solenoid_pulse, action)
+        elif action_type == "relay_sequence_pulse":
+            delay_ms = max(0, int(action.get("delay_ms", 0) or 0))
+            if delay_ms <= 0:
+                self._run_relay_sequence_pulse(action, notify=False)
+            else:
+                self._start_logic_timer(delay_ms / 1000, self._run_relay_sequence_pulse, action)
         elif action_type == "servo_set":
             channel = int(action.get("channel", 0))
             if self._bool(action.get("enable", True)):
@@ -706,9 +781,7 @@ class LogicEngine:
             if delay_ms <= 0:
                 self._run_pixels_animate(action, notify=False)
             else:
-                timer = threading.Timer(delay_ms / 1000, self._run_pixels_animate, args=(action,))
-                timer.daemon = True
-                timer.start()
+                self._start_logic_timer(delay_ms / 1000, self._run_pixels_animate, action)
         elif action_type == "dmx_fade":
             self._request_dmx_fade(action, rule_id, branch, index)
 
@@ -730,11 +803,39 @@ class LogicEngine:
         name = str(action.get("name") or "")
         duration = max(0, int(action.get("duration_ms", 1000))) / 1000
         self._controller.set_solenoid(name, True)
-        timer = threading.Timer(duration, self._finish_solenoid_pulse, args=(name,))
-        timer.daemon = True
-        timer.start()
+        self._start_logic_timer(duration, self._finish_solenoid_pulse, name)
         self._record_action_event("solenoid", "Solenoid pulse", f"{name} {int(duration * 1000)} ms")
         if notify and self._on_action:
+            self._on_action()
+
+    def _run_relay_sequence_pulse(self, action: dict[str, Any], notify: bool = True) -> None:
+        relay_a = str(action.get("relay_a") or "")
+        relay_b = str(action.get("relay_b") or "")
+        duration_a = max(0, int(action.get("duration_a_ms", 1000)))
+        duration_b = max(0, int(action.get("duration_b_ms", 1000)))
+        self._controller.set_solenoid(relay_a, True)
+        self._start_logic_timer(
+            duration_a / 1000,
+            self._finish_relay_sequence_first_pulse,
+            relay_a,
+            relay_b,
+            duration_b,
+        )
+        self._record_action_event(
+            "solenoid",
+            "Relay sequence",
+            f"{relay_a} {duration_a} ms, then {relay_b} {duration_b} ms",
+        )
+        if notify and self._on_action:
+            self._on_action()
+
+    def _finish_relay_sequence_first_pulse(
+        self, relay_a: str, relay_b: str, duration_b_ms: int
+    ) -> None:
+        self._controller.set_solenoid(relay_a, False)
+        self._controller.set_solenoid(relay_b, True)
+        self._start_logic_timer(duration_b_ms / 1000, self._finish_solenoid_pulse, relay_b)
+        if self._on_action:
             self._on_action()
 
     def _run_pixels_animate(self, action: dict[str, Any], notify: bool = True) -> None:
@@ -764,13 +865,7 @@ class LogicEngine:
             self._publish_dmx_request(payload)
             return
 
-        timer = threading.Timer(
-            delay_ms / 1000,
-            self._publish_dmx_request,
-            args=(payload,),
-        )
-        timer.daemon = True
-        timer.start()
+        self._start_logic_timer(delay_ms / 1000, self._publish_dmx_request, payload)
 
     def _publish_dmx_request(self, payload: dict[str, Any]) -> None:
         if self._publish_dmx_fade(payload):
@@ -788,7 +883,7 @@ class LogicEngine:
 
         payload: dict[str, Any] = {
             "hostname": socket.gethostname(),
-            "source": f"one_man_band.logic_rule_{rule_id}.{branch}_{index}",
+            "source": f"one_man_band.logic.{fixture_group_slug}",
             "fixture_group_slug": fixture_group_slug,
             "duration_ms": max(0, int(action.get("duration_ms", 1000) or 0)),
             "state": str(action.get("state") or "on"),

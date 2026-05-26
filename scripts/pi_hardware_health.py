@@ -8,16 +8,20 @@ import platform
 import pwd
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 
 I2C_BUS = 1
 RP2040_ADDRESS = 0x12
-BH1750_ADDRESSES = (0x23, 0x5C)
-BH1750_POWER_ON = 0x01
-BH1750_RESET = 0x07
-BH1750_ONE_TIME_HIGH_RES_MODE = 0x20
+RP2040_STATUS_REGISTER = 0x60
+RP2040_STATUS_LENGTH = 8
+RP2040_STATUS_MAGIC = 0xA5
+RP2040_STATUS_VERSION = 2
+RP2040_STATUS_CHECKSUM_INDEX = RP2040_STATUS_LENGTH - 1
+TINYRFID_ADDRESS = 0x13
+TINYRFID_STATUS_LENGTH = 16
+TINYRFID_STATUS_MAGIC = 0xA7
+TINYRFID_STATUS_VERSION = 1
 GPIO_PINS = {
     "1": 13,
     "2": 6,
@@ -26,6 +30,10 @@ GPIO_PINS = {
     "5": 27,
     "6": 17,
 }
+
+
+def xorless_checksum(data: list[int]) -> int:
+    return (-sum(data[:RP2040_STATUS_CHECKSUM_INDEX])) & 0xFF
 
 
 def status_line(ok: bool | None, label: str, detail: str) -> None:
@@ -107,62 +115,81 @@ def check_i2c() -> None:
 
     try:
         with SMBus(I2C_BUS) as bus:
-            bus.write_byte(RP2040_ADDRESS, 0x00)
-            version = bus.read_byte(RP2040_ADDRESS)
-        status_line(True, "RP2040 I2C", f"address=0x{RP2040_ADDRESS:02x} protocol_version={version}")
-        if version != 2:
-            status_line(False, "RP2040 protocol", "expected version 2")
+            data = [
+                value & 0xFF
+                for value in bus.read_i2c_block_data(
+                    RP2040_ADDRESS,
+                    RP2040_STATUS_REGISTER,
+                    RP2040_STATUS_LENGTH,
+                )
+            ]
+        detail = " ".join(f"{value:02X}" for value in data)
+        status_line(True, "RP2040 I2C", f"address=0x{RP2040_ADDRESS:02x} snapshot={detail}")
+        if len(data) != RP2040_STATUS_LENGTH:
+            status_line(False, "RP2040 protocol", f"expected {RP2040_STATUS_LENGTH} bytes")
+        elif data[0] != RP2040_STATUS_MAGIC:
+            status_line(False, "RP2040 protocol", f"bad magic 0x{data[0]:02x}")
+        elif data[1] != RP2040_STATUS_VERSION:
+            status_line(False, "RP2040 protocol", f"expected snapshot version {RP2040_STATUS_VERSION}, got {data[1]}")
+        elif data[RP2040_STATUS_CHECKSUM_INDEX] != xorless_checksum(data):
+            status_line(False, "RP2040 protocol", "bad snapshot checksum")
+        else:
+            status_line(True, "RP2040 protocol", f"snapshot version {data[1]}")
     except OSError as exc:
         status_line(False, "RP2040 I2C", str(exc))
 
     code, output = command_output(["i2cdetect", "-y", str(I2C_BUS)])
+    if code == 127:
+        code, output = command_output(["/usr/sbin/i2cdetect", "-y", str(I2C_BUS)])
     if code == 0:
-        seen = f"{RP2040_ADDRESS:02x}" in output.lower().split()
-        status_line(seen, "i2cdetect", f"0x{RP2040_ADDRESS:02x} {'seen' if seen else 'not seen'}")
+        detected_addresses = [
+            token
+            for token in output.lower().split()
+            if len(token) == 2 and all(character in "0123456789abcdef" for character in token)
+        ]
+        if len(detected_addresses) > 20:
+            status_line(False, "i2cdetect", f"{len(detected_addresses)} addresses answered; bus is likely stuck")
+        else:
+            seen = f"{RP2040_ADDRESS:02x}" in detected_addresses
+            status_line(seen, "i2cdetect", f"0x{RP2040_ADDRESS:02x} {'seen' if seen else 'not seen'}")
         print(output)
     else:
         status_line(None, "i2cdetect", output)
 
 
-def check_bh1750() -> None:
+def _xor_checksum(data: list[int]) -> int:
+    checksum = 0
+    for value in data[:-1]:
+        checksum ^= value & 0xFF
+    return checksum & 0xFF
+
+
+def check_tinyrfid() -> None:
     try:
         from smbus2 import SMBus
     except ImportError:
         return
 
-    selected_address = os.environ.get("OMB_BH1750_ADDRESS")
-    try:
-        addresses = (int(selected_address, 0),) if selected_address else BH1750_ADDRESSES
-    except ValueError:
-        status_line(False, "env OMB_BH1750_ADDRESS", selected_address)
-        return
-    found = False
-
     try:
         with SMBus(I2C_BUS) as bus:
-            for address in addresses:
-                try:
-                    bus.write_byte(address, BH1750_POWER_ON)
-                    bus.write_byte(address, BH1750_RESET)
-                    bus.write_byte(address, BH1750_ONE_TIME_HIGH_RES_MODE)
-                    time.sleep(0.18)
-                    msb, lsb = bus.read_i2c_block_data(
-                        address,
-                        BH1750_ONE_TIME_HIGH_RES_MODE,
-                        2,
-                    )
-                except OSError as exc:
-                    status_line(False, f"BH1750 0x{address:02x}", str(exc))
-                    continue
-                raw = (msb << 8) | lsb
-                status_line(True, f"BH1750 0x{address:02x}", f"raw={raw} lux={raw / 1.2:.2f}")
-                found = True
+            data = [value & 0xFF for value in bus.read_i2c_block_data(TINYRFID_ADDRESS, 0, TINYRFID_STATUS_LENGTH)]
     except OSError as exc:
-        status_line(False, "BH1750 I2C", str(exc))
+        status_line(False, "TinyRFID I2C", str(exc))
         return
 
-    if not found:
-        status_line(False, "BH1750", "no sensor responded")
+    if len(data) != TINYRFID_STATUS_LENGTH:
+        status_line(False, "TinyRFID status", f"short read: {len(data)} bytes")
+        return
+    if data[0] != TINYRFID_STATUS_MAGIC or data[1] != TINYRFID_STATUS_VERSION:
+        status_line(False, "TinyRFID status", f"bad header: 0x{data[0]:02x} version={data[1]}")
+        return
+    if data[-1] != _xor_checksum(data):
+        status_line(False, "TinyRFID status", f"bad checksum: 0x{data[-1]:02x}")
+        return
+    uid = ":".join(f"{value:02X}" for value in data[5:13])
+    scans = data[3] | (data[4] << 8)
+    tag = "present" if data[2] & 0x01 else "absent"
+    status_line(True, "TinyRFID status", f"tag={tag} scans={scans} uid={uid}")
 
 
 def check_gpio() -> None:
@@ -181,7 +208,7 @@ def check_gpio() -> None:
             GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
             values.append(f"{name}=GPIO{pin}:{GPIO.input(pin)}")
         status_line(True, "GPIO inputs", ", ".join(values))
-    except RuntimeError as exc:
+    except Exception as exc:
         status_line(False, "GPIO inputs", str(exc))
     finally:
         try:
@@ -227,9 +254,7 @@ def check_system() -> None:
     for name in (
         "OMB_MOCK_HARDWARE",
         "OMB_GPIO_PULL",
-        "OMB_BH1750_ADDRESS",
-        "OMB_BH1750_LOW_THRESHOLD_LUX",
-        "OMB_BH1750_HIGH_THRESHOLD_LUX",
+        "OMB_TINYRFID_ADDRESS",
         "SDL_AUDIODRIVER",
         "AUDIODEV",
     ):
@@ -245,8 +270,8 @@ def main() -> int:
     check_system()
     print("\nI2C")
     check_i2c()
-    print("\nBH1750")
-    check_bh1750()
+    print("\nTinyRFID")
+    check_tinyrfid()
     print("\nGPIO")
     check_gpio()
     print("\nAudio")
