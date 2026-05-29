@@ -1,0 +1,4 @@
+
+# Waveshare RS485 CAN HAT (B)
+dtparam=spi=on
+dtoverlay=mcp2515-can0,oscillator=16000000,interrupt=25,spimaxfrequency=1000000

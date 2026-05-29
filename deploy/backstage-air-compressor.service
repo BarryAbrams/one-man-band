@@ -1,0 +1,17 @@
+[Unit]
+Description=Backstage Air Compressor Diagnostics
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/backstage-air-compressor
+EnvironmentFile=/home/pi/backstage-air-compressor/.env
+ExecStart=/home/pi/backstage-air-compressor/.venv/bin/python /home/pi/backstage-air-compressor/app.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

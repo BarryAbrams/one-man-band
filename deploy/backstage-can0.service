@@ -1,0 +1,13 @@
+[Unit]
+Description=Bring up CAN0 for Backstage Air Compressor
+After=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/ip link set can0 up type can bitrate 100000
+ExecStart=/usr/sbin/ip link set can0 txqueuelen 65536
+ExecStop=/usr/sbin/ip link set can0 down
+
+[Install]
+WantedBy=multi-user.target
